@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	codexCLIVersion                 = "0.153.4"
+	codexCLIVersion                 = "0.154.0"
 	codexUserAgent                  = "codex_cli_rs/" + codexCLIVersion + " (Mac OS 26.5.2; arm64) Apple_Terminal/470 (codex-tui; " + codexCLIVersion + ")"
 	codexOriginator                 = "codex_cli_rs"
 	codexDefaultImageToolModel      = "gpt-image-2"

@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestDefaultCodexIdentityUsesCurrentClientVersion(t *testing.T) {
-	const expectedVersion = "0.153.4"
+	const expectedVersion = "0.154.0"
 	if defaultClientVersion != expectedVersion {
 		t.Fatalf("client version = %q, want %q", defaultClientVersion, expectedVersion)
 	}
