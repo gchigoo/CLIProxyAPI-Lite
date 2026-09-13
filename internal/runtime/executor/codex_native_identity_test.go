@@ -617,7 +617,7 @@ func TestCodexNativeIdentityMatchesHTTPAndWebsocketSessions(t *testing.T) {
 	if derivedWSState.sessionID != wsState.sessionID || derivedWSState.threadID != wsState.threadID {
 		t.Fatalf("pure identity derivation mismatch: derived=%s/%s applied=%s/%s", derivedWSState.sessionID, derivedWSState.threadID, wsState.sessionID, wsState.threadID)
 	}
-	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, "oauth-token", cfg)
+	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, "oauth-token", cfg, false)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 	applyCodexNativeIdentityWebsocketHeaders(wsHeaders, &wsState)
 
