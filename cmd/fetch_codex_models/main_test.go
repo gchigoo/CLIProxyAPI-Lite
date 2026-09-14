@@ -2,6 +2,20 @@ package main
 
 import "testing"
 
+func TestDefaultCodexIdentityUsesCurrentClientVersion(t *testing.T) {
+	const expectedVersion = "0.153.4"
+	if defaultClientVersion != expectedVersion {
+		t.Fatalf("client version = %q, want %q", defaultClientVersion, expectedVersion)
+	}
+	if expected := "codex_cli_rs/" + expectedVersion + " (Mac OS 26.3.1; arm64) iTerm.app/3.6.9"; defaultCodexUserAgent != expected {
+		t.Fatalf("user-agent = %q, want %q", defaultCodexUserAgent, expected)
+	}
+	modelURL, err := codexModelsURL(defaultClientVersion)
+	if err != nil || modelURL != "https://chatgpt.com/backend-api/codex/models?client_version="+expectedVersion {
+		t.Fatalf("model catalog URL = %q, error = %v", modelURL, err)
+	}
+}
+
 func TestCodexModelsURL(t *testing.T) {
 	got, err := codexModelsURL(" 0.144.1 ")
 	if err != nil {

@@ -1089,11 +1089,8 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 	if !strings.HasPrefix(codexUserAgent, codexOriginator+"/") {
 		t.Fatalf("default Codex User-Agent = %s, want prefix %s/", codexUserAgent, codexOriginator)
 	}
-	if !strings.HasPrefix(codexUserAgent, "codex-tui/") {
-		t.Fatalf("default Codex User-Agent = %s, want codex-tui prefix", codexUserAgent)
-	}
-	if !strings.Contains(codexUserAgent, "(codex-tui;") {
-		t.Fatalf("default Codex User-Agent = %s, want codex-tui suffix", codexUserAgent)
+	if !strings.HasPrefix(codexUserAgent, "codex_cli_rs/") {
+		t.Fatalf("default Codex User-Agent = %s, want codex_cli_rs prefix", codexUserAgent)
 	}
 	if got := headers.Get("Originator"); got != codexOriginator {
 		t.Fatalf("Originator = %s, want %s", got, codexOriginator)
@@ -1821,8 +1818,19 @@ func TestApplyCodexWebsocketHeaders_EmptyAPIKey_OmitsAuthorizationAndOAuthHeader
 	}
 }
 
+func TestCodexOfficialFingerprintScopeRejectsAPIKeyAuthKindWithoutKeyValue(t *testing.T) {
+	auth := &cliproxyauth.Auth{
+		Provider: "codex",
+		Attributes: map[string]string{
+			cliproxyauth.AttributeAuthKind: cliproxyauth.AuthKindAPIKey,
+		},
+	}
+	if codexOfficialFingerprintScope(&config.Config{}, auth, "wss://chatgpt.com/backend-api/codex/responses") {
+		t.Fatal("official Codex fingerprint unexpectedly enabled for API key auth_kind")
+	}
+}
+
 func TestApplyModelHeaderOverridesFromModelConfig(t *testing.T) {
-	const wantUA = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
@@ -1838,18 +1846,19 @@ func TestApplyModelHeaderOverridesFromModelConfig(t *testing.T) {
 	}
 
 	applyCodexHeaders(req, auth, "oauth-token", true, cfg)
+	wantUA := req.Header.Get("User-Agent")
 	applyModelHeaderOverrides(req.Header, "gpt-5.6-luna")
 
 	if got := req.Header.Get("User-Agent"); got != wantUA {
-		t.Fatalf("User-Agent = %q, want %q", got, wantUA)
+		t.Fatalf("User-Agent = %q, want unchanged %q", got, wantUA)
 	}
-	if got := codexSessionHeaderValue(req.Header); got == "" {
-		t.Fatal("expected Session_id to be set for Mac OS User-Agent override")
+	if got := codexSessionHeaderValue(req.Header); got != "" {
+		t.Fatalf("Session-Id = %q, want no stale static model identity override", got)
 	}
 
 	applyModelHeaderOverrides(req.Header, "gpt-5.4")
 	if got := req.Header.Get("User-Agent"); got != wantUA {
-		t.Fatalf("User-Agent after no-op override = %q, want %q", got, wantUA)
+		t.Fatalf("User-Agent after no-op override = %q, want unchanged %q", got, wantUA)
 	}
 }
 
@@ -1953,13 +1962,50 @@ func contextWithGinHeaders(headers map[string]string) context.Context {
 func TestNewProxyAwareWebsocketDialerDirectDisablesProxy(t *testing.T) {
 	t.Parallel()
 
-	dialer := newProxyAwareWebsocketDialer(
+	dialer, err := newProxyAwareWebsocketDialer(
 		&config.Config{SDKConfig: sdkconfig.SDKConfig{ProxyURL: "http://global-proxy.example.com:8080"}},
 		&cliproxyauth.Auth{ProxyURL: "direct"},
 	)
+	if err != nil {
+		t.Fatalf("newProxyAwareWebsocketDialer() error = %v", err)
+	}
 
 	if dialer.Proxy != nil {
 		t.Fatal("expected websocket proxy function to be nil for direct mode")
+	}
+}
+
+func TestNewProxyAwareWebsocketDialerInvalidExplicitProxyFailsClosed(t *testing.T) {
+	for _, proxyURL := range []string{"http://user:secret@", "ftp://user:secret@127.0.0.1:21"} {
+		t.Run(proxyURL, func(t *testing.T) {
+			dialer, err := newProxyAwareWebsocketDialer(&config.Config{SDKConfig: sdkconfig.SDKConfig{ProxyURL: proxyURL}}, nil)
+			if err == nil {
+				t.Fatalf("newProxyAwareWebsocketDialer() error = nil, dialer = %#v", dialer)
+			}
+			if dialer != nil {
+				t.Fatalf("dialer = %#v, want nil on invalid explicit proxy", dialer)
+			}
+			if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "user:secret") {
+				t.Fatalf("proxy error leaked credentials: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewCodexWebsocketDialerPropagatesUTLSProxyError(t *testing.T) {
+	dialer, err := newCodexWebsocketDialer(
+		&config.Config{SDKConfig: sdkconfig.SDKConfig{ProxyURL: "ftp://user:secret@127.0.0.1:21"}},
+		&cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "token"}},
+		"wss://chatgpt.com/backend-api/codex/responses",
+	)
+	if err == nil {
+		t.Fatalf("newCodexWebsocketDialer() error = nil, dialer = %#v", dialer)
+	}
+	if dialer != nil {
+		t.Fatalf("dialer = %#v, want nil on invalid proxy", dialer)
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "user:secret") {
+		t.Fatalf("proxy error leaked credentials: %v", err)
 	}
 }
 

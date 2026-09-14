@@ -166,6 +166,8 @@ type CodexConfig struct {
 	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
 	// DisableCodexCloaking disables forcing the official Codex identity headers on HTTP/SSE and WebSocket requests.
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
+	// DisableNativeIdentity disables Codex OAuth session metadata synthesis while keeping header cloaking available.
+	DisableNativeIdentity bool `yaml:"disable-native-identity" json:"disable-native-identity"`
 	// StreamBootstrapBuffering holds back initial handshake events (response.created,
 	// response.in_progress and the websocket metadata frames) until the first generated event
 	// arrives. The upstream delivers server_is_overloaded rejections inside an HTTP 200 stream

@@ -3,9 +3,13 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -23,11 +27,15 @@ import (
 )
 
 const (
-	codexUserAgent             = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
-	codexOriginator            = "codex-tui"
-	codexDefaultImageToolModel = "gpt-image-2"
-	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
-	codexResponsesLiteMetadata = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
+	codexCLIVersion                 = "0.153.4"
+	codexUserAgent                  = "codex_cli_rs/" + codexCLIVersion + " (Mac OS 26.5.2; arm64) Apple_Terminal/470 (codex-tui; " + codexCLIVersion + ")"
+	codexOriginator                 = "codex_cli_rs"
+	codexDefaultImageToolModel      = "gpt-image-2"
+	codexResponsesLiteHeader        = "X-OpenAI-Internal-Codex-Responses-Lite"
+	codexResponsesLiteMetadata      = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
+	codexNativeOriginator           = codexOriginator
+	codexNativeVersion              = codexCLIVersion
+	codexNativeTurnMetadataMaxBytes = 8 * 1024
 )
 
 var dataTag = []byte("data:")
@@ -97,7 +105,7 @@ type codexIdentityReplacement struct {
 	confused string
 }
 
-func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, userPayload []byte, rawJSON []byte, headerSets ...http.Header) (*http.Request, []byte, codexIdentityConfuseState, error) {
+func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, userPayload []byte, rawJSON []byte, headerSets ...http.Header) (*http.Request, []byte, codexIdentityConfuseState, codexNativeIdentityState, error) {
 	var headers http.Header
 	if len(headerSets) > 0 {
 		headers = headerSets[0]
@@ -110,7 +118,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 		}
 		cached, ok, errCache := helps.ClaudeCodePromptCache(ctx, modelName, req.Payload, headers)
 		if errCache != nil {
-			return nil, nil, codexIdentityConfuseState{}, errCache
+			return nil, nil, codexIdentityConfuseState{}, codexNativeIdentityState{}, errCache
 		}
 		if ok {
 			cache = cached
@@ -120,7 +128,7 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 		if promptCacheKey.Exists() {
 			cache.ID = promptCacheKey.String()
 		}
-	} else if sourceFormatEqual(from, sdktranslator.FormatOpenAI) {
+	} else if sourceFormatEqual(from, sdktranslator.FormatOpenAI) || strings.EqualFold(strings.TrimSpace(from.String()), codexOpenAIImageSourceFormat) {
 		if promptCacheKey := gjson.GetBytes(req.Payload, "prompt_cache_key"); promptCacheKey.Exists() {
 			cache.ID = strings.TrimSpace(promptCacheKey.String())
 		}
@@ -146,14 +154,16 @@ func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Form
 	if identityState.promptCacheKey != "" {
 		cache.ID = identityState.promptCacheKey
 	}
+	var nativeIdentityState codexNativeIdentityState
+	rawJSON, nativeIdentityState = applyCodexNativeIdentityBody(ctx, e.cfg, from, url, auth, req, cache.ID, rawJSON, headers)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
 	if err != nil {
-		return nil, nil, codexIdentityConfuseState{}, err
+		return nil, nil, codexIdentityConfuseState{}, codexNativeIdentityState{}, err
 	}
 	if cache.ID != "" {
 		httpReq.Header.Set("Session-Id", cache.ID)
 	}
-	return httpReq, rawJSON, identityState, nil
+	return httpReq, rawJSON, identityState, nativeIdentityState, nil
 }
 
 func applyCodexIdentityConfuseBody(cfg *config.Config, auth *cliproxyauth.Auth, userPayload []byte, rawJSON []byte) ([]byte, codexIdentityConfuseState) {
@@ -278,6 +288,327 @@ func codexIdentityConfuseUUID(authID string, kind string, value string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(name)).String()
 }
 
+type codexNativeIdentityState struct {
+	enabled        bool
+	installationID string
+	sessionID      string
+	threadID       string
+	turnID         string
+	windowID       string
+	turnMetadata   string
+	userAgent      string
+}
+
+func applyCodexNativeIdentityBody(ctx context.Context, cfg *config.Config, from sdktranslator.Format, requestURL string, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, cacheID string, rawJSON []byte, headerSets ...http.Header) ([]byte, codexNativeIdentityState) {
+	headers := downstreamHeaders(ctx, headerSets...)
+	state := deriveCodexNativeIdentityState(ctx, cfg, from, requestURL, auth, req, cacheID, rawJSON, headers)
+	if !state.enabled {
+		return rawJSON, codexNativeIdentityState{}
+	}
+
+	rawJSON = setCodexNativeBodyString(rawJSON, "prompt_cache_key", state.sessionID)
+	rawJSON = setCodexNativeBodyString(rawJSON, "client_metadata.x-codex-installation-id", state.installationID)
+	rawJSON = setCodexNativeBodyString(rawJSON, "client_metadata.session_id", state.sessionID)
+	rawJSON = setCodexNativeBodyString(rawJSON, "client_metadata.thread_id", state.threadID)
+	rawJSON = setCodexNativeBodyString(rawJSON, "client_metadata.turn_id", state.turnID)
+	rawJSON = setCodexNativeBodyString(rawJSON, "client_metadata.x-codex-window-id", state.windowID)
+	rawJSON = setCodexNativeBodyString(rawJSON, "client_metadata.x-codex-turn-metadata", state.turnMetadata)
+	return rawJSON, state
+}
+
+func deriveCodexNativeIdentityState(ctx context.Context, cfg *config.Config, from sdktranslator.Format, requestURL string, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, cacheID string, rawJSON []byte, headers http.Header) codexNativeIdentityState {
+	if !shouldSynthesizeCodexNativeIdentity(ctx, cfg, from, requestURL, auth, req.Model, headers) || len(rawJSON) == 0 || !gjson.ValidBytes(rawJSON) || !gjson.ParseBytes(rawJSON).IsObject() {
+		return codexNativeIdentityState{}
+	}
+	rawTurnMetadata := firstValidCodexNativeTurnMetadata(
+		headerValueCaseInsensitive(headers, "X-Codex-Turn-Metadata"),
+		gjson.GetBytes(rawJSON, "client_metadata.x-codex-turn-metadata").String(),
+		gjson.GetBytes(req.Payload, "client_metadata.x-codex-turn-metadata").String(),
+	)
+
+	defaultSessionID := stableCodexNativeUUID("session", firstNonEmptyCodexIdentityValue(cacheID, helps.ProviderSessionUUID("codex", req.Metadata)))
+	sessionID := firstValidCodexNativeUUID(
+		codexSessionHeaderValue(headers),
+		gjson.GetBytes(rawJSON, "client_metadata.session_id").String(),
+		gjson.GetBytes(req.Payload, "client_metadata.session_id").String(),
+		gjson.Get(rawTurnMetadata, "session_id").String(),
+		defaultSessionID,
+	)
+	threadID := firstValidCodexNativeUUID(
+		headerValueCaseInsensitive(headers, "Thread-Id"),
+		gjson.GetBytes(rawJSON, "client_metadata.thread_id").String(),
+		gjson.GetBytes(req.Payload, "client_metadata.thread_id").String(),
+		gjson.Get(rawTurnMetadata, "thread_id").String(),
+		sessionID,
+	)
+	installationID := firstValidCodexNativeUUID(
+		headerValueCaseInsensitive(headers, "X-Codex-Installation-Id"),
+		gjson.GetBytes(rawJSON, "client_metadata.x-codex-installation-id").String(),
+		gjson.GetBytes(req.Payload, "client_metadata.x-codex-installation-id").String(),
+		gjson.Get(rawTurnMetadata, "installation_id").String(),
+		codexNativeInstallationID(auth),
+	)
+	turnID := firstValidCodexNativeUUID(
+		gjson.GetBytes(rawJSON, "client_metadata.turn_id").String(),
+		gjson.GetBytes(req.Payload, "client_metadata.turn_id").String(),
+		gjson.Get(rawTurnMetadata, "turn_id").String(),
+		uuid.NewString(),
+	)
+	windowID := firstValidCodexNativeWindowID(threadID,
+		headerValueCaseInsensitive(headers, "X-Codex-Window-Id"),
+		gjson.GetBytes(rawJSON, "client_metadata.x-codex-window-id").String(),
+		gjson.GetBytes(req.Payload, "client_metadata.x-codex-window-id").String(),
+		gjson.Get(rawTurnMetadata, "window_id").String(),
+		threadID+":0",
+	)
+	if installationID == "" || sessionID == "" || threadID == "" || turnID == "" || windowID == "" {
+		return codexNativeIdentityState{}
+	}
+
+	return codexNativeIdentityState{
+		enabled:        true,
+		installationID: installationID,
+		sessionID:      sessionID,
+		threadID:       threadID,
+		turnID:         turnID,
+		windowID:       windowID,
+		turnMetadata:   fillCodexNativeTurnMetadata(rawTurnMetadata, installationID, sessionID, threadID, turnID, windowID),
+		userAgent:      officialCodexUserAgent(auth),
+	}
+}
+
+func applyCodexNativeIdentityHeaders(headers http.Header, state *codexNativeIdentityState) {
+	if headers == nil || state == nil || !state.enabled {
+		return
+	}
+
+	headers.Set("User-Agent", state.userAgent)
+	headers.Set("Originator", codexNativeOriginator)
+	headers.Set("Version", codexNativeVersion)
+	setCodexSessionHeaderCasePreserved(headers, "Session-Id", state.sessionID)
+	setHeaderCasePreserved(headers, "Thread-Id", state.threadID)
+	setHeaderCasePreserved(headers, "X-Client-Request-Id", state.threadID)
+	setHeaderCasePreserved(headers, "X-Codex-Installation-Id", state.installationID)
+	setHeaderCasePreserved(headers, "X-Codex-Window-Id", state.windowID)
+	setHeaderCasePreserved(headers, "X-Codex-Turn-Metadata", state.turnMetadata)
+}
+
+func applyCodexNativeIdentityWebsocketHeaders(headers http.Header, state *codexNativeIdentityState) {
+	if headers == nil || state == nil || !state.enabled {
+		return
+	}
+
+	headers.Set("User-Agent", state.userAgent)
+	headers.Set("Originator", codexNativeOriginator)
+	headers.Set("Version", codexNativeVersion)
+	setCodexSessionHeaderCasePreserved(headers, "session_id", state.sessionID)
+	setHeaderCasePreserved(headers, "Conversation_id", state.sessionID)
+	setHeaderCasePreserved(headers, "Thread-Id", state.threadID)
+	setHeaderCasePreserved(headers, "X-Client-Request-Id", state.threadID)
+	setHeaderCasePreserved(headers, "X-Codex-Turn-Metadata", state.turnMetadata)
+}
+
+func shouldSynthesizeCodexNativeIdentity(ctx context.Context, cfg *config.Config, from sdktranslator.Format, requestURL string, auth *cliproxyauth.Auth, model string, headers http.Header) bool {
+	if cfg == nil || cfg.Codex.DisableCodexCloaking || cfg.Codex.DisableNativeIdentity || codexIdentityConfuseEnabled(cfg) || codexNativeIdentityHeaderOverrideConflict(model) {
+		return false
+	}
+	if !codexNativeResponsesEndpoint(requestURL) {
+		return false
+	}
+	return codexOAuthAccessTokenUsed(auth)
+}
+
+func codexNativeResponsesEndpoint(requestURL string) bool {
+	parsed, errParse := url.Parse(strings.TrimSpace(requestURL))
+	if errParse != nil {
+		return false
+	}
+	trimmed := strings.TrimRight(parsed.Path, "/")
+	return strings.HasSuffix(trimmed, "/responses") || strings.HasSuffix(trimmed, "/responses/compact")
+}
+
+func codexNativeIdentityHeaderOverrideConflict(model string) bool {
+	model = thinking.ParseSuffix(strings.TrimSpace(model)).ModelName
+	overrides := registry.ModelOverrideHeaders(model)
+	for key, value := range overrides {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "user-agent":
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" && !strings.HasPrefix(strings.ToLower(trimmed), "codex_cli_rs/") {
+				return true
+			}
+		case "originator":
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" && !strings.EqualFold(trimmed, codexNativeOriginator) {
+				return true
+			}
+		case "version":
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" && trimmed != codexNativeVersion {
+				return true
+			}
+		case "session-id", "session_id", "thread-id", "x-client-request-id", "x-codex-installation-id", "x-codex-window-id", "x-codex-turn-metadata":
+			return true
+		}
+	}
+	return false
+}
+
+func codexOAuthAccessTokenUsed(auth *cliproxyauth.Auth) bool {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") || auth.AuthKind() != cliproxyauth.AuthKindOAuth {
+		return false
+	}
+	if auth.Attributes != nil && strings.TrimSpace(auth.Attributes[cliproxyauth.AttributeAPIKey]) != "" {
+		return false
+	}
+	if auth.Metadata == nil {
+		return false
+	}
+	accessToken, _ := auth.Metadata["access_token"].(string)
+	return strings.TrimSpace(accessToken) != ""
+}
+
+func downstreamHeaders(ctx context.Context, headerSets ...http.Header) http.Header {
+	if len(headerSets) > 0 && headerSets[0] != nil {
+		return headerSets[0]
+	}
+	if ctx == nil {
+		return nil
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil || ginCtx.Request == nil {
+		return nil
+	}
+	return ginCtx.Request.Header
+}
+
+func codexNativeInstallationID(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	credentialID := ""
+	if auth.Metadata != nil {
+		if accountID, ok := auth.Metadata["account_id"].(string); ok {
+			credentialID = strings.TrimSpace(accountID)
+		}
+	}
+	if credentialID == "" {
+		credentialID = strings.TrimSpace(auth.ID)
+	}
+	return stableCodexNativeUUID("installation", credentialID)
+}
+
+func stableCodexNativeUUID(kind, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, errParse := uuid.Parse(value); errParse == nil {
+		return parsed.String()
+	}
+	name := strings.Join([]string{"cli-proxy-api", "codex", "native-identity", strings.TrimSpace(kind), value}, ":")
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(name)).String()
+}
+
+func firstValidCodexNativeTurnMetadata(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > codexNativeTurnMetadataMaxBytes || !validCodexNativeHeaderValue(value) || !gjson.Valid(value) || !gjson.Parse(value).IsObject() {
+			continue
+		}
+		return value
+	}
+	return `{}`
+}
+
+func fillCodexNativeTurnMetadata(rawMetadata, installationID, sessionID, threadID, turnID, windowID string) string {
+	metadata := fillCodexNativeTurnMetadataObject(firstValidCodexNativeTurnMetadata(rawMetadata), installationID, sessionID, threadID, turnID, windowID)
+	if len(metadata) <= codexNativeTurnMetadataMaxBytes && validCodexNativeHeaderValue(metadata) {
+		return metadata
+	}
+	metadata = fillCodexNativeTurnMetadataObject(`{}`, installationID, sessionID, threadID, turnID, windowID)
+	if len(metadata) <= codexNativeTurnMetadataMaxBytes && validCodexNativeHeaderValue(metadata) {
+		return metadata
+	}
+	return `{"installation_id":"` + installationID + `","session_id":"` + sessionID + `","thread_id":"` + threadID + `","turn_id":"` + turnID + `","window_id":"` + windowID + `","request_kind":"turn","turn_started_at_unix_ms":` + strconv.FormatInt(time.Now().UnixMilli(), 10) + `}`
+}
+
+func fillCodexNativeTurnMetadataObject(metadata, installationID, sessionID, threadID, turnID, windowID string) string {
+	metadata, _ = sjson.Set(metadata, "installation_id", installationID)
+	metadata, _ = sjson.Set(metadata, "session_id", sessionID)
+	metadata, _ = sjson.Set(metadata, "thread_id", threadID)
+	metadata, _ = sjson.Set(metadata, "turn_id", turnID)
+	metadata, _ = sjson.Set(metadata, "window_id", windowID)
+	metadata, _ = sjson.Set(metadata, "request_kind", "turn")
+	startedAt := gjson.Get(metadata, "turn_started_at_unix_ms")
+	if startedAt.Type != gjson.Number || startedAt.Int() <= 0 {
+		metadata, _ = sjson.Set(metadata, "turn_started_at_unix_ms", time.Now().UnixMilli())
+	}
+	return metadata
+}
+
+func validCodexNativeHeaderValue(value string) bool {
+	for _, r := range value {
+		if r == '\r' || r == '\n' || r == 0x7f || r < 0x20 && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+func firstValidCodexNativeUUID(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 128 {
+			continue
+		}
+		parsed, errParse := uuid.Parse(value)
+		if errParse == nil {
+			return parsed.String()
+		}
+	}
+	return ""
+}
+
+func firstValidCodexNativeWindowID(threadID string, values ...string) string {
+	prefix := strings.TrimSpace(threadID) + ":"
+	if prefix == ":" {
+		return ""
+	}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 160 || !strings.HasPrefix(value, prefix) {
+			continue
+		}
+		windowNumber := strings.TrimPrefix(value, prefix)
+		parsed, errParse := strconv.ParseUint(windowNumber, 10, 32)
+		if errParse == nil {
+			return prefix + strconv.FormatUint(parsed, 10)
+		}
+	}
+	return ""
+}
+
+func setCodexNativeBodyString(body []byte, path, value string) []byte {
+	if strings.TrimSpace(value) == "" {
+		return body
+	}
+	updated, errSet := sjson.SetBytes(body, path, value)
+	if errSet != nil {
+		return body
+	}
+	return updated
+}
+
+func firstNonEmptyCodexIdentityValue(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, stream bool, cfg *config.Config, clientHeaders ...http.Header) {
 	var ginHeaders http.Header
 	if len(clientHeaders) > 0 && clientHeaders[0] != nil {
@@ -298,6 +629,9 @@ func applyModelHeaderOverrides(headers http.Header, modelName string) {
 		return
 	}
 	for key, value := range overrides {
+		if isStaleCodexTuiIdentityOverride(key, value) {
+			continue
+		}
 		headers.Set(key, value)
 	}
 	if strings.Contains(headers.Get("User-Agent"), "Mac OS") && codexSessionHeaderValue(headers) == "" {
@@ -366,15 +700,70 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 		attrs = auth.Attributes
 	}
 	util.ApplyCustomHeadersFromAttrs(r, attrs, ginHeaders)
-	applyCodexCloakingHeaders(r.Header, cfg)
+	applyCodexCloakingHeaders(r.Header, cfg, auth)
 }
 
-func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config) {
+type codexDeviceProfile struct {
+	osName    string
+	osVersion string
+	arch      string
+	terminal  string
+}
+
+// Per-account profiles keep three Codex OAuth credentials from sharing one UA
+// cluster fingerprint. Selection is SHA-256(account_id) so it is stable across
+// restarts (sub2api PR #1415).
+var codexDeviceProfiles = []codexDeviceProfile{
+	{"Mac OS", "26.5.2", "arm64", "Apple_Terminal/470"},
+	{"Mac OS", "15.6.0", "x86_64", "iTerm.app/3.6.11"},
+	{"Linux", "6.8.0-86-generic", "x86_64", "xterm-256color"},
+}
+
+func isStaleCodexTuiIdentityOverride(key, value string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "originator":
+		v := strings.ToLower(strings.TrimSpace(value))
+		return v == "codex-tui" || v == "codex_cli_rs"
+	case "user-agent":
+		lower := strings.ToLower(strings.TrimSpace(value))
+		return strings.HasPrefix(lower, "codex-tui/") || strings.HasPrefix(lower, "codex_cli_rs/")
+	default:
+		return false
+	}
+}
+
+func officialCodexUserAgent(auth *cliproxyauth.Auth) string {
+	profile := selectCodexDeviceProfile(auth)
+	return fmt.Sprintf("%s/%s (%s %s; %s) %s (codex-tui; %s)",
+		codexOriginator, codexCLIVersion, profile.osName, profile.osVersion, profile.arch, profile.terminal, codexCLIVersion)
+}
+
+func selectCodexDeviceProfile(auth *cliproxyauth.Auth) codexDeviceProfile {
+	id := ""
+	if auth != nil {
+		if auth.Metadata != nil {
+			if accountID, ok := auth.Metadata["account_id"].(string); ok {
+				id = strings.TrimSpace(accountID)
+			}
+		}
+		if id == "" {
+			id = strings.TrimSpace(auth.ID)
+		}
+	}
+	if id == "" {
+		return codexDeviceProfiles[0]
+	}
+	sum := sha256.Sum256([]byte("cli-proxy-api:codex:device-profile:" + id))
+	return codexDeviceProfiles[int(sum[0])%len(codexDeviceProfiles)]
+}
+
+func applyCodexCloakingHeaders(headers http.Header, cfg *config.Config, auth *cliproxyauth.Auth) {
 	if headers == nil || cfg == nil || cfg.Codex.DisableCodexCloaking {
 		return
 	}
-	headers.Set("User-Agent", codexUserAgent)
+	headers.Set("User-Agent", officialCodexUserAgent(auth))
 	headers.Set("Originator", codexOriginator)
+	headers.Set("Version", codexCLIVersion)
 }
 
 func normalizeCodexInstructions(body []byte) []byte {

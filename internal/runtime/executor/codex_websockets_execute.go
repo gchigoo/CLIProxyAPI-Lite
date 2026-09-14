@@ -85,10 +85,17 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	clientBody := body
 	var identityState codexIdentityConfuseState
 	upstreamBody, identityState := applyCodexIdentityConfuseBody(e.cfg, auth, originalPayloadSource, body)
+	var nativeIdentityState codexNativeIdentityState
+	nativeCacheID := codexSessionHeaderValue(wsHeaders)
+	if identityState.promptCacheKey != "" {
+		nativeCacheID = identityState.promptCacheKey
+	}
+	upstreamBody, nativeIdentityState = applyCodexNativeIdentityBody(ctx, e.cfg, from, httpURL, auth, req, nativeCacheID, upstreamBody, opts.Headers)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
+	applyCodexNativeIdentityWebsocketHeaders(wsHeaders, &nativeIdentityState)
 
 	var authID, authLabel, authType, authValue string
 	if auth != nil {

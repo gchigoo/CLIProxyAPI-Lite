@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -24,6 +25,20 @@ func newCodexOpenAIImageTestAuth(serverURL string) *cliproxyauth.Auth {
 		Attributes: map[string]string{
 			"base_url": serverURL,
 			"api_key":  "codex-token",
+		},
+	}
+}
+
+func newCodexOpenAIImageOAuthTestAuth(serverURL string) *cliproxyauth.Auth {
+	return &cliproxyauth.Auth{
+		ID:       "codex-image-oauth",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"base_url": serverURL,
+		},
+		Metadata: map[string]any{
+			"access_token": "codex-oauth-token",
+			"account_id":   "codex-image-account",
 		},
 	}
 }
@@ -96,8 +111,8 @@ func TestCodexExecutorDirectOpenAIImageGenerationUsesImagesEndpoint(t *testing.T
 	if gotUA != codexUserAgent {
 		t.Fatalf("User-Agent = %q, want codex default %q", gotUA, codexUserAgent)
 	}
-	if gotVersion != "0.135.0" {
-		t.Fatalf("Version = %q, want %q", gotVersion, "0.135.0")
+	if gotVersion != codexCLIVersion {
+		t.Fatalf("Version = %q, want %q", gotVersion, codexCLIVersion)
 	}
 	if gotTurnMetadata != `{"turn_id":"turn-1"}` {
 		t.Fatalf("X-Codex-Turn-Metadata = %q, want %q", gotTurnMetadata, `{"turn_id":"turn-1"}`)
@@ -116,6 +131,9 @@ func TestCodexExecutorDirectOpenAIImageGenerationUsesImagesEndpoint(t *testing.T
 	}
 	if got := gjson.GetBytes(gotBody, "output_compression").Int(); got != 70 {
 		t.Fatalf("output_compression = %d, want 70; body=%s", got, string(gotBody))
+	}
+	if gjson.GetBytes(gotBody, "client_metadata.x-codex-installation-id").Exists() {
+		t.Fatalf("direct image request unexpectedly synthesized native metadata: %s", string(gotBody))
 	}
 	if gjson.GetBytes(gotBody, "stream").Exists() {
 		t.Fatalf("stream should be removed for non-stream execution: %s", string(gotBody))
@@ -175,6 +193,129 @@ func TestCodexExecutorDirectOpenAIImageGenerationStreamsImagesEndpoint(t *testin
 	out := combined.String()
 	if !strings.Contains(out, "event: image_generation.partial_image") || !strings.Contains(out, "event: image_generation.completed") {
 		t.Fatalf("stream output missing image events: %q", out)
+	}
+}
+
+func TestCodexExecutorOpenAIImageResponsesSynthesizesNativeIdentity(t *testing.T) {
+	var gotPath string
+	var gotAuth string
+	var gotSessionID string
+	var gotThreadID string
+	var gotRequestID string
+	var gotTurnMetadata string
+	var gotUA string
+	var gotOriginator string
+	var gotVersion string
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotSessionID = r.Header.Get("Session-Id")
+		gotThreadID = r.Header.Get("Thread-Id")
+		gotRequestID = r.Header.Get("X-Client-Request-Id")
+		gotTurnMetadata = r.Header.Get("X-Codex-Turn-Metadata")
+		gotUA = r.Header.Get("User-Agent")
+		gotOriginator = r.Header.Get("Originator")
+		gotVersion = r.Header.Get("Version")
+		var errRead error
+		gotBody, errRead = io.ReadAll(r.Body)
+		if errRead != nil {
+			t.Fatalf("read body: %v", errRead)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"created_at":1713833628,"output":[{"type":"image_generation_call","result":"AA==","output_format":"png","size":"1024x1024","quality":"high","background":"opaque"}],"usage":{"total_tokens":3}}}
+
+`))
+	}))
+	defer server.Close()
+
+	auth := newCodexOpenAIImageOAuthTestAuth(server.URL)
+	executor := NewCodexExecutor(&config.Config{})
+	resp, errExecute := executor.Execute(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "dall-e-3",
+		Payload: []byte(`{"model":"dall-e-3","prompt":"A cute baby sea otter","prompt_cache_key":"image-session-one","n":1}`),
+	}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, false))
+	if errExecute != nil {
+		t.Fatalf("Execute() error = %v", errExecute)
+	}
+	if !bytes.Contains(resp.Payload, []byte(`"b64_json":"AA=="`)) {
+		t.Fatalf("response payload = %s, want completed image", string(resp.Payload))
+	}
+
+	bodySessionID := gjson.GetBytes(gotBody, "prompt_cache_key").String()
+	if gotPath != "/responses" {
+		t.Fatalf("path = %q, want /responses", gotPath)
+	}
+	if gotAuth != "Bearer codex-oauth-token" {
+		t.Fatalf("Authorization = %q, want Bearer codex-oauth-token", gotAuth)
+	}
+	if bodySessionID == "" || bodySessionID == "image-session-one" {
+		t.Fatalf("prompt_cache_key = %q, want stable synthesized UUID", bodySessionID)
+	}
+	if _, errParse := uuid.Parse(bodySessionID); errParse != nil {
+		t.Fatalf("prompt_cache_key = %q, want UUID: %v", bodySessionID, errParse)
+	}
+	for name, got := range map[string]string{
+		"Session-Id":                         gotSessionID,
+		"client_metadata.session_id":         gjson.GetBytes(gotBody, "client_metadata.session_id").String(),
+		"client_metadata.thread_id":          gjson.GetBytes(gotBody, "client_metadata.thread_id").String(),
+		"X-Codex-Turn-Metadata.session_id":   gjson.Get(gotTurnMetadata, "session_id").String(),
+		"X-Codex-Turn-Metadata.thread_id":    gjson.Get(gotTurnMetadata, "thread_id").String(),
+		"X-Codex-Turn-Metadata.window_id":    strings.TrimSuffix(gjson.Get(gotTurnMetadata, "window_id").String(), ":0"),
+		"X-Codex-Turn-Metadata.installation": gjson.Get(gotTurnMetadata, "installation_id").String(),
+	} {
+		if got != bodySessionID && name != "X-Codex-Turn-Metadata.installation" {
+			t.Fatalf("%s = %q, want session %q; body=%s metadata=%s", name, got, bodySessionID, string(gotBody), gotTurnMetadata)
+		}
+		if name == "X-Codex-Turn-Metadata.installation" && got != gjson.GetBytes(gotBody, "client_metadata.x-codex-installation-id").String() {
+			t.Fatalf("turn metadata installation = %q, want body installation", got)
+		}
+	}
+	if gotThreadID != bodySessionID || gotRequestID != bodySessionID {
+		t.Fatalf("thread/request headers = %q/%q, want %q", gotThreadID, gotRequestID, bodySessionID)
+	}
+	if gotUA != officialCodexUserAgent(auth) || gotOriginator != codexOriginator || gotVersion != codexCLIVersion {
+		t.Fatalf("native headers UA/originator/version = %q/%q/%q", gotUA, gotOriginator, gotVersion)
+	}
+}
+
+func TestCodexExecutorOpenAIImageResponsesStreamSynthesizesNativeIdentity(t *testing.T) {
+	var gotSessionID string
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSessionID = r.Header.Get("Session-Id")
+		var errRead error
+		gotBody, errRead = io.ReadAll(r.Body)
+		if errRead != nil {
+			t.Fatalf("read body: %v", errRead)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"created_at":1713833628,"output":[{"type":"image_generation_call","result":"BB==","output_format":"png"}],"usage":{"total_tokens":3}}}
+
+`))
+	}))
+	defer server.Close()
+
+	executor := NewCodexExecutor(&config.Config{})
+	stream, errStream := executor.ExecuteStream(context.Background(), newCodexOpenAIImageOAuthTestAuth(server.URL), cliproxyexecutor.Request{
+		Model:   "dall-e-3",
+		Payload: []byte(`{"model":"dall-e-3","prompt":"A cute baby sea otter","prompt_cache_key":"stream-image-session","partial_images":1}`),
+	}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, true))
+	if errStream != nil {
+		t.Fatalf("ExecuteStream() error = %v", errStream)
+	}
+	var combined bytes.Buffer
+	for chunk := range stream.Chunks {
+		if chunk.Err != nil {
+			t.Fatalf("stream chunk error = %v", chunk.Err)
+		}
+		combined.Write(chunk.Payload)
+	}
+	if !strings.Contains(combined.String(), "image_generation.completed") {
+		t.Fatalf("stream output missing completion: %q", combined.String())
+	}
+	if gotSessionID == "" || gotSessionID != gjson.GetBytes(gotBody, "prompt_cache_key").String() || gotSessionID != gjson.GetBytes(gotBody, "client_metadata.session_id").String() {
+		t.Fatalf("stream native identity mismatch: header=%q body=%s", gotSessionID, string(gotBody))
 	}
 }
 

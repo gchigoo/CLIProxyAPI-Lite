@@ -246,6 +246,8 @@ codex:
   identity-confuse: false
   # Disable forcing the official Codex User-Agent and Originator headers on HTTP/SSE and WebSocket requests.
   disable-codex-cloaking: false
+  # Disable Codex OAuth native session metadata synthesis while keeping header cloaking enabled.
+  disable-native-identity: false
   # Hold back the initial handshake events (response.created, response.in_progress and the
   # websocket metadata frames) until the upstream emits its first generated event.
   # Why: the upstream smuggles `server_is_overloaded` rejections *inside* an HTTP 200 stream,
