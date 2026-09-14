@@ -255,6 +255,7 @@ func cloneTransportWithHTTP11(base *http.Transport, cfgs ...*config.Config) *htt
 	// an empty NextProtos keeps the wire shape aligned while using HTTP/1.1.
 	clone.TLSClientConfig.NextProtos = nil
 	applyAntigravityPoolLimits(clone, cfgs...)
+	helps.InstallAntigravityNodeTLS(clone)
 	return clone
 }
 
@@ -377,8 +378,8 @@ func antigravityProxiedHTTP11Transport(auth *cliproxyauth.Auth, proxyURL string,
 		return cloneTransportWithHTTP11(base, cfgs...), nil
 	})
 	if errGet != nil {
-		// The caller falls back to NewProxyAwareHTTPClient, which reports the failure
-		// and applies the context transport fallback.
+		// The caller delegates invalid explicit proxies to NewProxyAwareHTTPClient,
+		// which fails closed without caching a broken pool.
 		return nil
 	}
 	return transport
@@ -443,8 +444,8 @@ func newAntigravityHTTPClient(ctx context.Context, cfg *config.Config, auth *cli
 		if transport := antigravityProxiedHTTP11Transport(auth, proxyURL, cfg); transport != nil {
 			return &http.Client{Transport: transport, Timeout: timeout}
 		}
-		// Fall through so NewProxyAwareHTTPClient reports the failure and applies the
-		// context transport fallback, preserving the previous behavior.
+		// Fall through so NewProxyAwareHTTPClient reports the failure without
+		// bypassing the invalid explicit proxy.
 	}
 
 	client := helps.NewProxyAwareHTTPClient(ctx, cfg, auth, timeout)

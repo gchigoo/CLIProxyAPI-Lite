@@ -1221,3 +1221,29 @@ func TestGeminiExecutor_PrepareRequest_EmptyAPIKey_OmitsAuthHeaders(t *testing.T
 		t.Fatalf("Custom-Token = %q, want gemini-secret", got)
 	}
 }
+
+func TestApplyGeminiHeadersSetsCLIIdentity(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("User-Agent", "Go-http-client/2.0")
+	applyGeminiHeaders(req, nil)
+
+	if got := req.Header.Get("User-Agent"); got != geminiCLIUserAgent {
+		t.Fatalf("User-Agent = %q, want %q", got, geminiCLIUserAgent)
+	}
+	if got := req.Header.Get("x-goog-api-client"); got != geminiCLIAPIClient {
+		t.Fatalf("x-goog-api-client = %q, want %q", got, geminiCLIAPIClient)
+	}
+
+	req.Header.Set("User-Agent", "GeminiCLI/0.1.0 custom")
+	req.Header.Set("x-goog-api-client", "existing-client")
+	applyGeminiHeaders(req, nil)
+	if got := req.Header.Get("User-Agent"); got != "GeminiCLI/0.1.0 custom" {
+		t.Fatalf("custom User-Agent overwritten: %q", got)
+	}
+	if got := req.Header.Get("x-goog-api-client"); got != "existing-client" {
+		t.Fatalf("custom x-goog-api-client overwritten: %q", got)
+	}
+}

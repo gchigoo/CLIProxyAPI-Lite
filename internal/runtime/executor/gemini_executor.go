@@ -38,6 +38,9 @@ const (
 
 	// geminiInteractionsAPIRevision is the default API revision for native Interactions requests.
 	geminiInteractionsAPIRevision = "2026-05-20"
+
+	geminiCLIUserAgent = "GeminiCLI/0.22.2 (darwin; arm64) node/22.21.1"
+	geminiCLIAPIClient = "google-genai-sdk/1.30.0 gl-node/22.21.1"
 )
 
 // GeminiExecutor is a stateless executor for the official Gemini API using API keys.
@@ -109,7 +112,7 @@ func (e *GeminiExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
 	return httpClient.Do(httpReq)
 }
 
@@ -212,7 +215,7 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		AuthValue: authValue,
 	})
 
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
 	httpClient = reporter.TrackHTTPClient(httpClient)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -327,7 +330,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		AuthValue: authValue,
 	})
 
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
 	httpClient = reporter.TrackHTTPClient(httpClient)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -445,7 +448,7 @@ func (e *GeminiExecutor) executeInteractions(ctx context.Context, auth *cliproxy
 		AuthValue: authValue,
 	})
 
-	httpClient := reporter.TrackHTTPClient(helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0))
+	httpClient := reporter.TrackHTTPClient(helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0))
 	httpResp, errDo := httpClient.Do(httpReq)
 	if errDo != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -525,7 +528,7 @@ func (e *GeminiExecutor) executeInteractionsStream(ctx context.Context, auth *cl
 		AuthValue: authValue,
 	})
 
-	httpClient := reporter.TrackHTTPClient(helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0))
+	httpClient := reporter.TrackHTTPClient(helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0))
 	httpResp, errDo := httpClient.Do(httpReq)
 	if errDo != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -688,7 +691,7 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		AuthValue: authValue,
 	})
 
-	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -918,6 +921,20 @@ func applyGeminiHeaders(req *http.Request, auth *cliproxyauth.Auth, clientHeader
 		attrs = auth.Attributes
 	}
 	util.ApplyCustomHeadersFromAttrs(req, attrs, clientHeaders...)
+	applyGeminiCLIIdentityHeaders(req)
+}
+
+func applyGeminiCLIIdentityHeaders(req *http.Request) {
+	if req == nil {
+		return
+	}
+	ua := strings.TrimSpace(req.Header.Get("User-Agent"))
+	if ua == "" || strings.HasPrefix(ua, "Go-http-client/") {
+		req.Header.Set("User-Agent", geminiCLIUserAgent)
+	}
+	if strings.TrimSpace(req.Header.Get("x-goog-api-client")) == "" {
+		req.Header.Set("x-goog-api-client", geminiCLIAPIClient)
+	}
 }
 
 func capGeminiMaxOutputTokens(body []byte, modelName string) []byte {

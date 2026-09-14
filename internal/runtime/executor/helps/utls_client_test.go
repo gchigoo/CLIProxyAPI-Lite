@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	cryptotls "crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strconv"
@@ -197,6 +200,206 @@ func TestUtlsRoundTripperHandshakeUsesRequestContext(t *testing.T) {
 	}
 }
 
+func TestUtlsRoundTripperInvalidExplicitProxyFailsBeforeDial(t *testing.T) {
+	dialed := false
+	handshook := false
+	roundTripper := newUtlsRoundTripperWithHandshake("http://user:secret@", func(context.Context, net.Conn, string) (*tls.UConn, error) {
+		handshook = true
+		return nil, nil
+	})
+	roundTripper.dialer = contextDialerFunc(func(context.Context, string, string) (net.Conn, error) {
+		dialed = true
+		return nil, fmt.Errorf("unexpected dial")
+	})
+
+	req, errRequest := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if errRequest != nil {
+		t.Fatal(errRequest)
+	}
+	_, errRoundTrip := roundTripper.RoundTrip(req)
+	if errRoundTrip == nil {
+		t.Fatal("RoundTrip() error = nil, want invalid proxy error")
+	}
+	if dialed || handshook {
+		t.Fatalf("invalid proxy reached dial/handshake: dialed=%t handshook=%t", dialed, handshook)
+	}
+	if strings.Contains(errRoundTrip.Error(), "secret") || strings.Contains(errRoundTrip.Error(), "user:secret") {
+		t.Fatalf("proxy error leaked credentials: %v", errRoundTrip)
+	}
+}
+
+func TestProxyDialerStrictAcceptsSupportedModes(t *testing.T) {
+	t.Parallel()
+
+	for _, proxyURL := range []string{
+		"direct",
+		"none",
+		"http://user:pass@127.0.0.1:8080",
+		"https://user:pass@127.0.0.1:8443",
+		"socks5://user:pass@127.0.0.1:1080",
+		"socks5h://user:pass@127.0.0.1:1080",
+	} {
+		t.Run(proxyURL, func(t *testing.T) {
+			dialer, err := proxyDialerStrictOrDirect(proxyURL)
+			if err != nil {
+				t.Fatalf("proxyDialerStrictOrDirect() error = %v", err)
+			}
+			if dialer == nil {
+				t.Fatal("dialer = nil")
+			}
+		})
+	}
+}
+
+func TestUtlsRoundTripperH2SafeExitUsesOneConnectionPerRequest(t *testing.T) {
+	var connections atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.Proto))
+	}))
+	server.EnableHTTP2 = true
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	roundTripper := newUtlsRoundTripperWithHandshake("", func(ctx context.Context, conn net.Conn, host string) (*tls.UConn, error) {
+		tlsConn := tls.UClient(conn, &tls.Config{ServerName: host, InsecureSkipVerify: true, NextProtos: []string{"h2"}}, tls.HelloGolang)
+		if errHandshake := tlsConn.HandshakeContext(ctx); errHandshake != nil {
+			return nil, errHandshake
+		}
+		if got := tlsConn.ConnectionState().NegotiatedProtocol; got != "h2" {
+			_ = tlsConn.Close()
+			return nil, fmt.Errorf("negotiated protocol = %q, want h2", got)
+		}
+		return tlsConn, nil
+	})
+	client := &http.Client{Transport: roundTripper}
+
+	for i := 0; i < 2; i++ {
+		resp, errGet := client.Get(server.URL)
+		if errGet != nil {
+			t.Fatalf("request %d error = %v", i+1, errGet)
+		}
+		data, errRead := io.ReadAll(resp.Body)
+		if errClose := resp.Body.Close(); errClose != nil {
+			t.Fatalf("request %d body close error = %v", i+1, errClose)
+		}
+		if errRead != nil {
+			t.Fatalf("request %d body read error = %v", i+1, errRead)
+		}
+		if string(data) != "HTTP/2.0" {
+			t.Fatalf("request %d protocol = %q, want HTTP/2.0", i+1, string(data))
+		}
+	}
+	if got := connections.Load(); got != 2 {
+		t.Fatalf("connections = %d, want 2 for the safe-exit single-request h2 path", got)
+	}
+}
+
+func TestCloneStdTLSConfigForUTLSPreservesBaseFields(t *testing.T) {
+	roots := x509.NewCertPool()
+	keyLog := &bytes.Buffer{}
+	verifyPeerCalled := false
+	verifyConnectionCalled := false
+	baseCert := cryptotls.Certificate{
+		Certificate:                  [][]byte{{1, 2, 3}},
+		SupportedSignatureAlgorithms: []cryptotls.SignatureScheme{cryptotls.PSSWithSHA256},
+	}
+	base := &cryptotls.Config{
+		Certificates:                []cryptotls.Certificate{baseCert},
+		GetClientCertificate:        func(*cryptotls.CertificateRequestInfo) (*cryptotls.Certificate, error) { return &baseCert, nil },
+		VerifyPeerCertificate:       func([][]byte, [][]*x509.Certificate) error { verifyPeerCalled = true; return nil },
+		VerifyConnection:            func(cryptotls.ConnectionState) error { verifyConnectionCalled = true; return nil },
+		RootCAs:                     roots,
+		NextProtos:                  []string{"h2"},
+		ServerName:                  "example.com",
+		InsecureSkipVerify:          true,
+		CipherSuites:                []uint16{cryptotls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+		SessionTicketsDisabled:      true,
+		MinVersion:                  cryptotls.VersionTLS12,
+		MaxVersion:                  cryptotls.VersionTLS13,
+		CurvePreferences:            []cryptotls.CurveID{cryptotls.CurveP256},
+		DynamicRecordSizingDisabled: true,
+		Renegotiation:               cryptotls.RenegotiateOnceAsClient,
+		KeyLogWriter:                keyLog,
+	}
+
+	converted := cloneStdTLSConfigForUTLS(base)
+	if converted.RootCAs != roots || converted.KeyLogWriter != keyLog || converted.ServerName != "example.com" {
+		t.Fatal("converted TLS config did not preserve RootCAs, KeyLogWriter, or ServerName")
+	}
+	if len(converted.Certificates) != 1 || len(converted.Certificates[0].Certificate) != 1 || converted.Certificates[0].Certificate[0][0] != 1 {
+		t.Fatalf("converted certificates = %#v, want copied client certificate", converted.Certificates)
+	}
+	if converted.MinVersion != cryptotls.VersionTLS12 || converted.MaxVersion != cryptotls.VersionTLS13 {
+		t.Fatalf("TLS version bounds = %#x/%#x, want TLS 1.2/1.3", converted.MinVersion, converted.MaxVersion)
+	}
+	if len(converted.NextProtos) != 1 || converted.NextProtos[0] != "h2" || len(converted.CurvePreferences) != 1 || converted.CurvePreferences[0] != tls.CurveP256 {
+		t.Fatalf("converted ALPN/curves = %v/%v", converted.NextProtos, converted.CurvePreferences)
+	}
+	if converted.GetClientCertificate == nil || converted.VerifyPeerCertificate == nil || converted.VerifyConnection == nil {
+		t.Fatal("converted TLS callbacks must be installed")
+	}
+	if cert, err := converted.GetClientCertificate(&tls.CertificateRequestInfo{}); err != nil || cert == nil || len(cert.Certificate) != 1 {
+		t.Fatalf("GetClientCertificate() = %#v, %v", cert, err)
+	}
+	if err := converted.VerifyPeerCertificate(nil, nil); err != nil {
+		t.Fatalf("VerifyPeerCertificate() error = %v", err)
+	}
+	if err := converted.VerifyConnection(tls.ConnectionState{}); err != nil {
+		t.Fatalf("VerifyConnection() error = %v", err)
+	}
+	if !verifyPeerCalled || !verifyConnectionCalled {
+		t.Fatalf("callbacks called = peer:%t connection:%t", verifyPeerCalled, verifyConnectionCalled)
+	}
+	base.NextProtos[0] = "http/1.1"
+	if converted.NextProtos[0] != "h2" {
+		t.Fatalf("converted NextProtos changed after base mutation: %v", converted.NextProtos)
+	}
+}
+
+func TestUTLSWebsocketDialContextInheritsBaseTLSConfig(t *testing.T) {
+	var verifyConnectionCalled atomic.Bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	base := &cryptotls.Config{
+		RootCAs:    roots,
+		NextProtos: []string{"h2"},
+		VerifyConnection: func(cryptotls.ConnectionState) error {
+			verifyConnectionCalled.Store(true)
+			return nil
+		},
+	}
+	dialContext, errDialer := NewUTLSWebsocketDialContext("", base)
+	if errDialer != nil {
+		t.Fatalf("NewUTLSWebsocketDialContext() error = %v", errDialer)
+	}
+	conn, errDial := dialContext(t.Context(), "tcp", server.Listener.Addr().String())
+	if errDial != nil {
+		t.Fatalf("websocket TLS dial error = %v", errDial)
+	}
+	if errClose := conn.Close(); errClose != nil {
+		t.Fatalf("close websocket TLS connection: %v", errClose)
+	}
+	if !verifyConnectionCalled.Load() {
+		t.Fatal("VerifyConnection callback was not called")
+	}
+	if base.ServerName != "" {
+		t.Fatalf("base ServerName was mutated to %q", base.ServerName)
+	}
+	if len(base.NextProtos) != 1 || base.NextProtos[0] != "h2" {
+		t.Fatalf("base NextProtos mutated: %v", base.NextProtos)
+	}
+}
+
 type claudeCodeTLSFingerprintFixture struct {
 	ClientHelloLength   int
 	JA3                 string
@@ -379,6 +582,26 @@ func TestClaudeCodeTLSClientHelloCapture(t *testing.T) {
 	}
 }
 
+func TestCodexChromeWebsocketSpecUsesHTTP11(t *testing.T) {
+	t.Parallel()
+	spec, err := codexChromeWebsocketClientHelloSpec()
+	if err != nil {
+		t.Fatalf("codexChromeWebsocketClientHelloSpec returned error: %v", err)
+	}
+	var alpn []string
+	for _, extension := range spec.Extensions {
+		switch typed := extension.(type) {
+		case *tls.ALPNExtension:
+			alpn = typed.AlpnProtocols
+		case *tls.ApplicationSettingsExtension, *tls.ApplicationSettingsExtensionNew:
+			t.Fatalf("websocket ClientHello retained HTTP/2 application settings: %T", typed)
+		}
+	}
+	if got, want := strings.Join(alpn, ","), "http/1.1"; got != want {
+		t.Fatalf("ALPN = %q, want %q", got, want)
+	}
+}
+
 func TestFallbackRoundTripperSelectsProviderFingerprint(t *testing.T) {
 	t.Parallel()
 
@@ -395,6 +618,8 @@ func TestFallbackRoundTripperSelectsProviderFingerprint(t *testing.T) {
 	roundTripper := &fallbackRoundTripper{
 		anthropic: route("anthropic"),
 		chrome:    route("chrome"),
+		googleH2:  route("googleH2"),
+		googleH1:  route("googleH1"),
 		fallback:  route("fallback"),
 	}
 	tests := []struct {
@@ -408,6 +633,13 @@ func TestFallbackRoundTripperSelectsProviderFingerprint(t *testing.T) {
 		{name: "Anthropic userinfo", url: "https://caller@api.anthropic.com/v1/messages", want: "fallback"},
 		{name: "Anthropic lookalike", url: "https://api.anthropic.com.example/v1/messages", want: "fallback"},
 		{name: "ChatGPT HTTPS", url: "https://chatgpt.com/backend-api/codex/responses", want: "chrome"},
+		{name: "Gemini HTTPS", url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent", want: "googleH2"},
+		{name: "Vertex global HTTPS", url: "https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google/models/gemini:generateContent", want: "googleH2"},
+		{name: "Vertex regional HTTPS", url: "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/publishers/google/models/gemini:generateContent", want: "googleH2"},
+		{name: "Cloud Code HTTPS", url: "https://cloudcode-pa.googleapis.com/v1internal:generateContent", want: "googleH1"},
+		{name: "Cloud Code regional HTTPS", url: "https://us-central1-cloudcode-pa.googleapis.com/v1internal:generateContent", want: "googleH1"},
+		{name: "Google OAuth HTTPS", url: "https://oauth2.googleapis.com/token", want: "fallback"},
+		{name: "Google Storage HTTPS", url: "https://storage.googleapis.com/upload", want: "fallback"},
 		{name: "Other HTTPS", url: "https://example.com/v1/messages", want: "fallback"},
 		{name: "Anthropic HTTP", url: "http://api.anthropic.com/v1/messages", want: "fallback"},
 	}
@@ -439,6 +671,8 @@ func TestNewUtlsHTTPClientUsesContextRoundTripperForProtectedHost(t *testing.T) 
 	for _, targetURL := range []string{
 		"https://api.anthropic.com/v1/messages",
 		"https://chatgpt.com/backend-api/codex/responses",
+		"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+		"https://cloudcode-pa.googleapis.com/v1internal:generateContent",
 	} {
 		t.Run(targetURL, func(t *testing.T) {
 			called := false

@@ -572,8 +572,8 @@ func TestAntigravityTransportCacheEvictsStalePools(t *testing.T) {
 	}
 }
 
-// TestAntigravityProxiedHTTP11TransportRejectsInvalidProxy verifies the caller can
-// fall back instead of caching a broken pool.
+// TestAntigravityProxiedHTTP11TransportRejectsInvalidProxy verifies invalid proxy
+// settings do not cache a broken pool.
 func TestAntigravityProxiedHTTP11TransportRejectsInvalidProxy(t *testing.T) {
 	auth := antigravityAuthWithIDAndProxy("invalid-proxy", "ftp://127.0.0.1:1")
 	if transport := antigravityProxiedHTTP11Transport(auth, "ftp://127.0.0.1:1"); transport != nil {
@@ -585,6 +585,26 @@ func TestAntigravityProxiedHTTP11TransportRejectsInvalidProxy(t *testing.T) {
 	// A failed build must not occupy a cache slot, so a later valid setting still works.
 	if transport := antigravityProxiedHTTP11Transport(auth, "http://127.0.0.1:18099"); transport == nil {
 		t.Fatal("a valid proxy must produce a transport")
+	}
+}
+
+func TestNewAntigravityHTTPClientInvalidProxyFailsClosed(t *testing.T) {
+	called := false
+	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, nil
+	}))
+	client := newAntigravityHTTPClient(ctx, &config.Config{}, antigravityAuthWithIDAndProxy("invalid-proxy-client", "ftp://user:secret@127.0.0.1:1"), 0)
+
+	_, err := client.Get("https://cloudcode-pa.googleapis.com/v1internal:generateContent")
+	if err == nil {
+		t.Fatal("client.Get() error = nil, want invalid proxy error")
+	}
+	if called {
+		t.Fatal("context RoundTripper was called despite invalid explicit proxy")
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "user:secret") {
+		t.Fatalf("proxy error leaked credentials: %v", err)
 	}
 }
 
@@ -635,6 +655,43 @@ func TestAntigravityTransportMatchesNativeTLSProfile(t *testing.T) {
 	}
 	if negotiatedProtocol != "" {
 		t.Fatalf("negotiated ALPN = %q, want empty", negotiatedProtocol)
+	}
+}
+
+func TestAntigravityTransportInheritsBaseTLSConfig(t *testing.T) {
+	var verifyConnectionCalled bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	base, ok := server.Client().Transport.(*http.Transport)
+	if !ok || base.TLSClientConfig == nil {
+		t.Fatalf("test server client transport = %T, want *http.Transport with TLS config", server.Client().Transport)
+	}
+	base = base.Clone()
+	base.TLSClientConfig = base.TLSClientConfig.Clone()
+	base.TLSClientConfig.MinVersion = tls.VersionTLS13
+	base.TLSClientConfig.MaxVersion = tls.VersionTLS13
+	base.TLSClientConfig.NextProtos = []string{"h2"}
+	base.TLSClientConfig.VerifyConnection = func(tls.ConnectionState) error {
+		verifyConnectionCalled = true
+		return nil
+	}
+
+	transport := antigravityHTTP11Transport(antigravityAuthWithIDAndProxy("base-tls-inheritance", ""), base)
+	resp, errDo := (&http.Client{Transport: transport}).Get(server.URL)
+	if errDo != nil {
+		t.Fatalf("GET() error = %v", errDo)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatalf("close response body: %v", errClose)
+	}
+	if !verifyConnectionCalled {
+		t.Fatal("base VerifyConnection callback was not called")
+	}
+	if len(base.TLSClientConfig.NextProtos) != 1 || base.TLSClientConfig.NextProtos[0] != "h2" {
+		t.Fatalf("base TLS config was mutated: NextProtos=%v", base.TLSClientConfig.NextProtos)
 	}
 }
 

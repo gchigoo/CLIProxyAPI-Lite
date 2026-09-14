@@ -2,6 +2,7 @@ package helps
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -9,7 +10,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
-	log "github.com/sirupsen/logrus"
 )
 
 // NewProxyAwareHTTPClient creates an HTTP client with proper proxy configuration priority:
@@ -42,15 +42,17 @@ func NewProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 		proxyURL = strings.TrimSpace(cfg.ProxyURL)
 	}
 
-	// If we have a proxy URL configured, set up the transport
+	// If an explicit proxy is configured, it must either be used or fail closed.
 	if proxyURL != "" {
-		transport := buildProxyTransport(proxyURL)
-		if transport != nil {
+		transport, mode, errProxy := buildProxyTransportStrict(proxyURL)
+		if errProxy != nil {
+			httpClient.Transport = failClosedRoundTripper{err: errProxy}
+			return httpClient
+		}
+		if mode == proxyutil.ModeDirect || mode == proxyutil.ModeProxy {
 			httpClient.Transport = transport
 			return httpClient
 		}
-		// If proxy setup failed, log and fall through to context RoundTripper
-		log.Debugf("failed to setup proxy from URL: %s, falling back to context transport", proxyutil.Redact(proxyURL))
 	}
 
 	// Priority 3: Use RoundTripper from context (typically from RoundTripperFor)
@@ -61,19 +63,32 @@ func NewProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 	return httpClient
 }
 
+type failClosedRoundTripper struct {
+	err error
+}
+
+func (rt failClosedRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, rt.err
+}
+
+func newProxyConfigurationError(component string, proxyURL string, err error) error {
+	return fmt.Errorf("%s: invalid proxy %s: %w", component, proxyutil.Redact(proxyURL), err)
+}
+
 // buildProxyTransport creates an HTTP transport configured for the given proxy URL.
-// It supports SOCKS5, HTTP, and HTTPS proxy protocols.
-//
-// Parameters:
-//   - proxyURL: The proxy URL string (e.g., "socks5://user:pass@host:port", "http://host:port")
-//
-// Returns:
-//   - *http.Transport: A configured transport, or nil if the proxy URL is invalid
+// It supports direct, SOCKS5, HTTP, and HTTPS proxy protocols.
 func buildProxyTransport(proxyURL string) *http.Transport {
-	transport, _, errBuild := proxyutil.BuildHTTPTransport(proxyURL)
-	if errBuild != nil {
-		log.Errorf("%v", errBuild)
+	transport, mode, errBuild := buildProxyTransportStrict(proxyURL)
+	if errBuild != nil || mode == proxyutil.ModeInherit {
 		return nil
 	}
 	return transport
+}
+
+func buildProxyTransportStrict(proxyURL string) (*http.Transport, proxyutil.Mode, error) {
+	transport, mode, errBuild := proxyutil.BuildHTTPTransport(proxyURL)
+	if errBuild != nil {
+		return nil, mode, newProxyConfigurationError("proxy", proxyURL, errBuild)
+	}
+	return transport, mode, nil
 }
