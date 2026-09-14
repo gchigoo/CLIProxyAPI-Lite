@@ -44,6 +44,16 @@ func TestIsCodexMultiAgentClient(t *testing.T) {
 			want:      true,
 		},
 		{
+			name:      "codex exec",
+			userAgent: "codex_exec/0.153.0 (Windows 10.0.26200; x86_64) WindowsTerminal (codex_exec; 0.153.0)",
+			want:      true,
+		},
+		{
+			name:      "bare codex exec",
+			userAgent: "codex_exec",
+			want:      true,
+		},
+		{
 			name:      "other client",
 			userAgent: "curl/8.7.1",
 			want:      false,
@@ -366,6 +376,28 @@ func TestPrepareCodexMultiAgentV2ToolsOnlyPreparesToolDefinitions(t *testing.T) 
 	}
 }
 
+func TestPrepareCodexMultiAgentV2ToolsCodexExecUserAgent(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{
+		"input":[
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"namespace","name":"collaboration","tools":[
+					{"type":"function","name":"spawn_agent","parameters":{"type":"object","properties":{"message":{"type":"string","encrypted":true}}}}
+				]}
+			]}
+		]
+	}`)
+	headers := http.Header{"User-Agent": []string{"codex_exec/0.153.0 (Windows 10.0.26200; x86_64) WindowsTerminal (codex_exec; 0.153.0)"}}
+	got, prepared := PrepareCodexMultiAgentV2Tools(context.Background(), headers, payload, true, false)
+	if !prepared {
+		t.Fatal("Codex exec request was not marked prepared")
+	}
+	if encrypted := gjson.GetBytes(got, "input.0.tools.0.tools.0.parameters.properties.message.encrypted"); encrypted.Exists() {
+		t.Fatalf("spawn_agent message.encrypted was not removed: %s", encrypted.Raw)
+	}
+}
+
 func TestOptimizeCodexMultiAgentV2RequestSkipsPreparedToolRefresh(t *testing.T) {
 	t.Parallel()
 
@@ -567,6 +599,12 @@ func TestRewriteCodexMultiAgentV2InputConditions(t *testing.T) {
 			name:      "codex tui enabled",
 			cfg:       &config.Config{Codex: config.CodexConfig{OptimizeMultiAgentV2: true}},
 			userAgent: "codex-tui/0.153.3",
+			want:      true,
+		},
+		{
+			name:      "codex exec enabled",
+			cfg:       &config.Config{Codex: config.CodexConfig{OptimizeMultiAgentV2: true}},
+			userAgent: "codex_exec/0.153.0 (Windows 10.0.26200; x86_64) WindowsTerminal (codex_exec; 0.153.0)",
 			want:      true,
 		},
 		{
