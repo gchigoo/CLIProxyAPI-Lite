@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGetStaticModelDefinitionsByChannelSupportsGeminiInteractions(t *testing.T) {
 	models := GetStaticModelDefinitionsByChannel("gemini-interactions")
@@ -9,14 +12,45 @@ func TestGetStaticModelDefinitionsByChannelSupportsGeminiInteractions(t *testing
 	}
 }
 
-func TestModelOverrideHeadersFromEmbeddedModels(t *testing.T) {
-	const wantUA = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)"
-	got := ModelOverrideHeaders("gpt-5.6-luna")
-	if got == nil {
-		t.Fatal("ModelOverrideHeaders(gpt-5.6-luna) = nil, want headers")
+func TestStaticCodexSubscriptionModelsIncludeAstra(t *testing.T) {
+	for plan, models := range map[string][]*ModelInfo{
+		"plus": GetCodexPlusModels(),
+		"pro":  GetCodexProModels(),
+		"team": GetCodexTeamModels(),
+	} {
+		t.Run(plan, func(t *testing.T) {
+			for _, model := range models {
+				if model == nil || model.ID != "gpt-6-astra" {
+					continue
+				}
+				if model.Thinking == nil || strings.Join(model.Thinking.Levels, ",") != "low,medium,high,xhigh,max" {
+					t.Fatalf("Astra reasoning levels = %#v, want supported nonzero efforts", model.Thinking)
+				}
+				return
+			}
+			t.Fatal("subscription catalog is missing gpt-6-astra")
+		})
 	}
-	if got["user-agent"] != wantUA {
-		t.Fatalf("user-agent = %q, want %q", got["user-agent"], wantUA)
+}
+
+func TestStaticCodexModelsDoNotContainStaleIdentityOverrides(t *testing.T) {
+	for _, model := range GetStaticModelDefinitionsByChannel("codex") {
+		if model == nil || model.Config == nil {
+			continue
+		}
+		for key, value := range model.Config.OverrideHeader {
+			lowerKey := strings.ToLower(strings.TrimSpace(key))
+			lowerValue := strings.ToLower(strings.TrimSpace(value))
+			if lowerKey == "originator" && (lowerValue == "codex-tui" || lowerValue == "codex_cli_rs") {
+				t.Fatalf("model %s contains stale Codex originator override %q", model.ID, value)
+			}
+			if lowerKey == "user-agent" && (strings.HasPrefix(lowerValue, "codex-tui/") || strings.HasPrefix(lowerValue, "codex_cli_rs/")) {
+				t.Fatalf("model %s contains stale Codex user-agent override %q", model.ID, value)
+			}
+		}
+	}
+	if got := ModelOverrideHeaders("gpt-5.6-luna"); got != nil {
+		t.Fatalf("ModelOverrideHeaders(gpt-5.6-luna) = %#v, want nil after dead overrides were removed", got)
 	}
 	if got := ModelOverrideHeaders("gpt-5.4"); got != nil {
 		t.Fatalf("ModelOverrideHeaders(gpt-5.4) = %#v, want nil", got)
