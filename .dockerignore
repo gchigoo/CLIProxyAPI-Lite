@@ -39,3 +39,16 @@ bin
 .bmad
 _bmad
 _bmad-output
+
+# Private environment and local output
+.env
+.env.*
+!.env.example
+!.env.cluster.example
+*.exe
+cli-proxy-api
+CLIProxyAPI
+test-output
+AGENTS.md
+CLAUDE.md
+GEMINI.md

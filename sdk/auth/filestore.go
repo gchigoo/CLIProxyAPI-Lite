@@ -10,46 +10,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
-
-// PluginAuthParser parses auth JSON owned by plugin providers.
-type PluginAuthParser interface {
-	ParseAuth(context.Context, pluginapi.AuthParseRequest) (*cliproxyauth.Auth, bool, error)
-}
-
-// PluginMultiAuthParser expands one auth JSON payload into multiple plugin auth records.
-// Returning handled=true with an empty slice means the plugin intentionally suppresses built-in parsing.
-type PluginMultiAuthParser interface {
-	ParseAuths(context.Context, pluginapi.AuthParseRequest) ([]*cliproxyauth.Auth, bool, error)
-}
-
-type pluginAuthParserHolder struct {
-	parser PluginAuthParser
-}
-
-var pluginAuthParserValue atomic.Value
-
-// RegisterPluginAuthParser registers the current plugin auth parser.
-func RegisterPluginAuthParser(parser PluginAuthParser) {
-	pluginAuthParserValue.Store(pluginAuthParserHolder{parser: parser})
-}
-
-func currentPluginAuthParser() PluginAuthParser {
-	value := pluginAuthParserValue.Load()
-	if value == nil {
-		return nil
-	}
-	holder, ok := value.(pluginAuthParserHolder)
-	if !ok {
-		return nil
-	}
-	return holder.parser
-}
 
 // FileTokenStore persists token records and auth metadata using the filesystem as backing storage.
 type FileTokenStore struct {
@@ -249,57 +213,6 @@ func (s *FileTokenStore) readAuthFiles(path, baseDir string) ([]*cliproxyauth.Au
 	if errStat != nil {
 		return nil, fmt.Errorf("stat file: %w", errStat)
 	}
-	if parser := currentPluginAuthParser(); parser != nil {
-		auths, handled, errParse := parsePluginAuthFile(parser, pluginapi.AuthParseRequest{
-			Provider: provider,
-			Path:     path,
-			FileName: s.idFor(path, baseDir),
-			RawJSON:  data,
-		})
-		if errParse == nil && handled {
-			auths = compactPluginAuths(auths)
-			if len(auths) == 0 {
-				return nil, nil
-			}
-			disabled, _ := metadata["disabled"].(bool)
-			for index, auth := range auths {
-				if auth == nil {
-					continue
-				}
-				cliproxyauth.NormalizeCredentialMetadata(auth.Metadata)
-				if len(auths) > 1 {
-					cliproxyauth.MarkPluginVirtualAuth(auth, path, index)
-				}
-				auth.CreatedAt = info.ModTime()
-				auth.UpdatedAt = info.ModTime()
-				if auth.Attributes == nil {
-					auth.Attributes = make(map[string]string)
-				}
-				auth.Attributes[cliproxyauth.AttributePath] = path
-				auth.Attributes[cliproxyauth.AttributeSource] = path
-				auth.Attributes[cliproxyauth.AttributeSourceBackend] = cliproxyauth.AuthSourceFile
-				if disabled {
-					auth.Disabled = true
-					auth.Status = cliproxyauth.StatusDisabled
-					if auth.Metadata == nil {
-						auth.Metadata = make(map[string]any)
-					}
-					auth.Metadata["disabled"] = true
-				}
-				if p, ok := metadata["proxy_url"].(string); ok && auth.ProxyURL == "" {
-					auth.ProxyURL = strings.TrimSpace(p)
-				}
-				if pref, ok := metadata["prefix"].(string); ok && auth.Prefix == "" {
-					auth.Prefix = strings.Trim(strings.TrimSpace(pref), "/")
-				}
-				if errWeight := cliproxyauth.ApplyAuthWeightMetadata(auth, metadata); errWeight != nil {
-					return nil, errWeight
-				}
-				cliproxyauth.ApplyCustomHeadersFromMetadata(auth)
-			}
-			return auths, nil
-		}
-	}
 	if provider == "" {
 		provider = "unknown"
 	}
@@ -358,37 +271,6 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 		return nil, errReadAuths
 	}
 	return auths[0], nil
-}
-
-func parsePluginAuthFile(parser PluginAuthParser, req pluginapi.AuthParseRequest) ([]*cliproxyauth.Auth, bool, error) {
-	if parser == nil {
-		return nil, false, nil
-	}
-	if multiParser, ok := parser.(PluginMultiAuthParser); ok {
-		return multiParser.ParseAuths(context.Background(), req)
-	}
-	auth, handled, errParse := parser.ParseAuth(context.Background(), req)
-	if errParse != nil || !handled || auth == nil {
-		return nil, handled, errParse
-	}
-	return []*cliproxyauth.Auth{auth}, true, nil
-}
-
-func compactPluginAuths(auths []*cliproxyauth.Auth) []*cliproxyauth.Auth {
-	if len(auths) == 0 {
-		return nil
-	}
-	out := auths[:0]
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		if errWeight := cliproxyauth.ValidateAuthWeight(auth); errWeight != nil {
-			continue
-		}
-		out = append(out, auth)
-	}
-	return out
 }
 
 func (s *FileTokenStore) idFor(path, baseDir string) string {

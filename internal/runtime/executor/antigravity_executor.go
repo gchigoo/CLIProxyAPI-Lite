@@ -387,7 +387,7 @@ func antigravityProxiedHTTP11Transport(auth *cliproxyauth.Auth, proxyURL string,
 
 // antigravityTransportScope returns the connection-pool scope for one credential.
 // Runtime auths always carry an ID. Incomplete auth objects, such as those built by
-// tests, plugins or SDK embedders, fall back to another stable credential marker so
+// tests or SDK embedders, fall back to another stable credential marker so
 // they neither share a pool with an unrelated OAuth identity nor allocate a fresh
 // pool, and with it a fresh set of pool goroutines, on every single request.
 func antigravityTransportScope(auth *cliproxyauth.Auth) string {

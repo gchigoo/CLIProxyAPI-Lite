@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -61,24 +60,6 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
 		return
 	}
-	if coreauth.IsPluginVirtualAuth(targetAuth) {
-		// Allow status changes only when targeting the source auth file name, matching delete semantics.
-		// Expanded virtual project auths still cannot be modified independently.
-		if !isPluginVirtualSourceDelete(name, targetAuth) {
-			c.JSON(http.StatusConflict, gin.H{"error": errPluginVirtualAuth.Error()})
-			return
-		}
-		if errPatch := h.patchPluginVirtualSourceStatus(ctx, targetAuth, *req.Disabled); errPatch != nil {
-			status := http.StatusInternalServerError
-			if errors.Is(errPatch, errAuthFileNotFound) || os.IsNotExist(errPatch) {
-				status = http.StatusNotFound
-			}
-			c.JSON(status, gin.H{"error": errPatch.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": *req.Disabled})
-		return
-	}
 
 	if coreauth.IsConfigAPIKeyAuth(targetAuth) {
 		h.mu.Lock()
@@ -130,54 +111,6 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": *req.Disabled})
-}
-
-// patchPluginVirtualSourceStatus toggles disabled on a plugin multi-auth source file and all
-// runtime auths expanded from it. Virtual project children cannot be toggled independently.
-func (h *Handler) patchPluginVirtualSourceStatus(ctx context.Context, targetAuth *coreauth.Auth, disabled bool) error {
-	if h == nil || h.authManager == nil || targetAuth == nil {
-		return fmt.Errorf("core auth manager unavailable")
-	}
-	sourcePath := strings.TrimSpace(authAttribute(targetAuth, coreauth.AttributeVirtualSource))
-	if sourcePath == "" {
-		sourcePath = strings.TrimSpace(authAttribute(targetAuth, "path"))
-	}
-	if sourcePath == "" {
-		return errPluginVirtualAuth
-	}
-	if errWrite := setSourceAuthFileDisabled(sourcePath, disabled); errWrite != nil {
-		if os.IsNotExist(errWrite) {
-			return errAuthFileNotFound
-		}
-		return fmt.Errorf("failed to update source auth file: %w", errWrite)
-	}
-	now := time.Now()
-	for _, auth := range h.authManager.List() {
-		if auth == nil {
-			continue
-		}
-		if !sameAuthFilePath(authAttribute(auth, "path"), sourcePath) &&
-			!sameAuthFilePath(authAttribute(auth, coreauth.AttributeVirtualSource), sourcePath) {
-			continue
-		}
-		applyAuthDisabledState(auth, disabled)
-		auth.UpdatedAt = now
-		updated, errUpdate := h.authManager.Update(ctx, auth)
-		if errUpdate != nil {
-			return fmt.Errorf("failed to update auth %s: %w", auth.ID, errUpdate)
-		}
-		if h.postAuthPersistHook != nil {
-			hookAuth := updated
-			if hookAuth == nil {
-				hookAuth = auth
-			}
-			if errHook := h.postAuthPersistHook(ctx, hookAuth); errHook != nil {
-				log.Errorf("post-auth persist hook failed for plugin virtual auth %s: %v", auth.ID, errHook)
-				return fmt.Errorf("failed to synchronize plugin virtual auth %s: %w", auth.ID, errHook)
-			}
-		}
-	}
-	return nil
 }
 
 func setSourceAuthFileDisabled(path string, disabled bool) error {
@@ -295,10 +228,6 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 
 	if targetAuth == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
-		return
-	}
-	if coreauth.IsPluginVirtualAuth(targetAuth) {
-		c.JSON(http.StatusConflict, gin.H{"error": errPluginVirtualAuth.Error()})
 		return
 	}
 	coreauth.NormalizeCredentialMetadata(targetAuth.Metadata)
@@ -810,7 +739,7 @@ func (h *Handler) removeAuthsForPath(ctx context.Context, path string, fallbackI
 		if auth == nil {
 			continue
 		}
-		if sameAuthFilePath(authAttribute(auth, "path"), path) || sameAuthFilePath(authAttribute(auth, coreauth.AttributeVirtualSource), path) {
+		if sameAuthFilePath(authAttribute(auth, "path"), path) {
 			h.removeAuth(ctx, auth.ID)
 			removed = true
 		}
@@ -935,11 +864,10 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (s
 		persistedRecord := record
 		if data, errRead := os.ReadFile(savedPath); errRead == nil && len(data) > 0 {
 			auths, errSynthesize := synthesizer.SynthesizeAuthFile(&synthesizer.SynthesisContext{
-				Config:           h.cfg,
-				AuthDir:          filepath.Dir(savedPath),
-				Now:              time.Now(),
-				IDGenerator:      synthesizer.NewStableIDGenerator(),
-				PluginAuthParser: h.pluginHost,
+				Config:      h.cfg,
+				AuthDir:     filepath.Dir(savedPath),
+				Now:         time.Now(),
+				IDGenerator: synthesizer.NewStableIDGenerator(),
 			}, savedPath, data)
 			if errSynthesize != nil {
 				return savedPath, fmt.Errorf("synthesize persisted auth failed: %w", errSynthesize)

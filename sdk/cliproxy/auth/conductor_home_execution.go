@@ -191,13 +191,6 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 				}
 				execOpts.Metadata = meta
 			}
-			var errIntercept error
-			execReq, execOpts, errIntercept = applyRequestAfterAuthInterceptor(execCtx, selection.Executor, selection.Provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
-			if errIntercept != nil {
-				releaseAttempt()
-				selection.End("request_intercepted")
-				return cliproxyexecutor.Response{}, errIntercept
-			}
 			if !restoreExecutionModel {
 				execReq = attachResolvedAPIKeyModelInfo(routing, execReq, preparedAuth, routeModel, upstreamModel)
 				execReq = attachResolvedHomeModelInfo(execReq, selection.modelInfo)

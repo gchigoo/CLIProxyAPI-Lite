@@ -12,6 +12,33 @@ import (
 
 const openAIToolResultImageOmittedText = "[image omitted: unsupported by upstream]"
 
+// NormalizeClaudeToolResultsTextOnly handles tool images before translation moves
+// them into user messages. Ordinary user images and the caller's buffer are preserved.
+func NormalizeClaudeToolResultsTextOnly(payload []byte) []byte {
+	result := payload
+	gjson.GetBytes(payload, "messages").ForEach(func(messageIndex, message gjson.Result) bool {
+		if message.Get("role").String() != "user" || !message.Get("content").IsArray() {
+			return true
+		}
+		message.Get("content").ForEach(func(partIndex, part gjson.Result) bool {
+			if part.Get("type").String() != "tool_result" {
+				return true
+			}
+			content := part.Get("content")
+			if !content.IsArray() && !content.IsObject() {
+				return true
+			}
+			contentPath := fmt.Sprintf("messages.%d.content.%d.content", messageIndex.Int(), partIndex.Int())
+			if updated, err := sjson.SetBytes(result, contentPath, flattenOpenAIToolResultContent(content)); err == nil {
+				result = updated
+			}
+			return true
+		})
+		return true
+	})
+	return result
+}
+
 // ShouldNormalizeOpenAIToolResultsForModel reports whether the selected model
 // explicitly excludes image input through its input-modalities configuration.
 func ShouldNormalizeOpenAIToolResultsForModel(compat *config.OpenAICompatibility, upstreamModel, requestedModel string) bool {

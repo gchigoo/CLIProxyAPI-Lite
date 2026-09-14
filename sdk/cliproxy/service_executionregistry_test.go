@@ -19,13 +19,10 @@ import (
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/homeplugins"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executionregistry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
-	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 )
 
 type blockingServiceCooldownStore struct {
@@ -345,7 +342,7 @@ func TestHomeConfigWorkerDoesNotApplyCanceledQueuedConfig(t *testing.T) {
 }
 
 func TestHomeConfigWorkerSkipsStagedConfigWhenReplacementCancels(t *testing.T) {
-	client, _ := newHomePluginTaskTestClient(t, nil, 0)
+	client := newHomeConfigTestClient(t)
 	baseCfg := &config.Config{}
 	baseCfg.Home.Enabled = true
 	baseCfg.Routing.Strategy = "round-robin"
@@ -420,7 +417,7 @@ func TestHomeConfigWorkerSkipsStagedConfigWhenReplacementCancels(t *testing.T) {
 }
 
 func TestHomeConfigWorkerCommitCompletesBeforeReplacementCancellation(t *testing.T) {
-	client, _ := newHomePluginTaskTestClient(t, nil, 0)
+	client := newHomeConfigTestClient(t)
 	baseCfg := &config.Config{}
 	baseCfg.Home.Enabled = true
 	baseCfg.Routing.Strategy = "round-robin"
@@ -508,7 +505,7 @@ func TestHomeConfigWorkerCancellationAtPostCommitBoundarySkipsRuntimePublish(t *
 		{name: "transport", cancel: func(_, cancelLifetime context.CancelFunc) { cancelLifetime() }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			client, _ := newHomePluginTaskTestClient(t, nil, 0)
+			client := newHomeConfigTestClient(t)
 			baseCfg := &config.Config{}
 			baseCfg.Home.Enabled = true
 			baseCfg.Routing.Strategy = "round-robin"
@@ -587,7 +584,7 @@ func TestHomeConfigWorkerShutdownCancelsBlockedRuntimeUpdatesBeforePublish(t *te
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			client, _ := newHomePluginTaskTestClient(t, nil, 0)
+			client := newHomeConfigTestClient(t)
 			baseCfg := &config.Config{}
 			baseCfg.Home.Enabled = true
 			baseCfg.Home.NodeID = "node-1"
@@ -662,7 +659,7 @@ func TestHomeConfigWorkerCancelsBlockedAntigravityModelRefreshBeforePublish(t *t
 	t.Cleanup(modelServer.Close)
 	t.Cleanup(func() { releaseModelRefreshOnce.Do(func() { close(releaseModelRefresh) }) })
 
-	client, _ := newHomePluginTaskTestClient(t, nil, 0)
+	client := newHomeConfigTestClient(t)
 	baseCfg := &config.Config{}
 	baseCfg.Home.Enabled = true
 	manager := coreauth.NewManager(nil, nil, nil)
@@ -688,7 +685,6 @@ func TestHomeConfigWorkerCancelsBlockedAntigravityModelRefreshBeforePublish(t *t
 	service := &Service{
 		cfg:            baseCfg,
 		coreManager:    manager,
-		pluginHost:     pluginhost.New(),
 		homeGeneration: 1,
 	}
 	queue := newHomeConfigWorkQueue()
@@ -727,73 +723,12 @@ func TestHomeConfigWorkerCancelsBlockedAntigravityModelRefreshBeforePublish(t *t
 	}
 }
 
-func TestHomeConfigWorkerRetriesStageFailureForSameQueuedConfig(t *testing.T) {
-	client, _ := newHomePluginTaskTestClient(t, nil, 0)
-	baseCfg := &config.Config{}
-	baseCfg.Home.Enabled = true
-	baseCfg.Routing.Strategy = "round-robin"
-	var attempts atomic.Int32
-	service := &Service{
-		cfg:            baseCfg,
-		homeGeneration: 1,
-		homePluginSyncFetch: func(context.Context, sdkpluginstore.PluginSyncRequest) (sdkpluginstore.PluginSyncResponse, error) {
-			if attempts.Add(1) == 1 {
-				return sdkpluginstore.PluginSyncResponse{}, fmt.Errorf("plugin sync unavailable")
-			}
-			return sdkpluginstore.PluginSyncResponse{
-				SchemaVersion: sdkpluginstore.PluginSyncSchemaVersion,
-				ExpiresAt:     time.Now().Add(time.Minute),
-			}, nil
-		},
-	}
-	queue := newHomeConfigWorkQueue()
-	queue.enqueue([]byte("plugins:\n  enabled: true\nrouting:\n  strategy: fill-first\n"))
-	ready := make(chan struct{})
-	close(ready)
-	lifetimeCtx, cancelLifetime := context.WithCancel(context.Background())
-	t.Cleanup(cancelLifetime)
-	cancelBound := atomic.Int64{}
-	cancelBound.Store(int64(time.Second))
-	published := atomic.Bool{}
-	published.Store(true)
-	workerDone := make(chan struct{})
-	go func() {
-		defer close(workerDone)
-		service.runHomeConfigWorker(lifetimeCtx, context.Background(), 1, client, executionregistry.New(), queue, ready, &published, &cancelBound)
-	}()
-
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		service.cfgMu.RLock()
-		strategy := service.cfg.Routing.Strategy
-		service.cfgMu.RUnlock()
-		if attempts.Load() >= 2 && strategy == "fill-first" {
-			cancelLifetime()
-			select {
-			case <-workerDone:
-			case <-time.After(time.Second):
-				t.Fatal("config worker did not stop after cancellation")
-			}
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	cancelLifetime()
-	<-workerDone
-	t.Fatalf("stage attempts = %d and config was not applied after retry", attempts.Load())
-}
-
-func TestServiceInitialOverlayStagesPluginWritesUntilReady(t *testing.T) {
+func newHomeConfigTestClient(t *testing.T) *home.Client {
+	t.Helper()
 	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
 	if errListen != nil {
 		t.Fatalf("listen: %v", errListen)
 	}
-	pluginSync := make(chan struct{})
-	pluginStatus := make(chan struct{}, 2)
-	pluginTasks := make(chan struct{})
-	freshCommandProbe := make(chan struct{})
-	allowAck := make(chan struct{})
-	stop := make(chan struct{})
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
@@ -802,180 +737,40 @@ func TestServiceInitialOverlayStagesPluginWritesUntilReady(t *testing.T) {
 			if errAccept != nil {
 				return
 			}
-			go serveInitialOverlayPluginConnection(conn, pluginSync, pluginStatus, pluginTasks, freshCommandProbe, allowAck, stop)
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				reader := bufio.NewReader(conn)
+				for {
+					args, errRead := readRegistryTestRedisCommand(reader)
+					if errRead != nil {
+						return
+					}
+					switch {
+					case len(args) > 0 && strings.EqualFold(args[0], "HELLO"):
+						_, _ = io.WriteString(conn, "%6\r\n$6\r\nserver\r\n$5\r\nredis\r\n$5\r\nproto\r\n:3\r\n$2\r\nid\r\n:1\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$7\r\nmodules\r\n*0\r\n")
+					default:
+						_, _ = io.WriteString(conn, "+OK\r\n")
+					}
+				}
+			}(conn)
 		}
 	}()
 	t.Cleanup(func() {
-		close(stop)
 		_ = listener.Close()
 		<-serverDone
-		home.ClearCurrent()
 	})
-
 	host, portText, errSplit := net.SplitHostPort(listener.Addr().String())
 	if errSplit != nil {
-		t.Fatalf("split listener address: %v", errSplit)
+		t.Fatalf("split address: %v", errSplit)
 	}
-	port, errPort := strconv.Atoi(portText)
-	if errPort != nil {
-		t.Fatalf("parse port: %v", errPort)
-	}
-	cfg := &config.Config{}
-	cfg.Home.Enabled = true
-	cfg.Home.Host = host
-	cfg.Home.Port = port
-	cfg.Home.NodeID = "node-1"
-	cfg.Home.DisableClusterDiscovery = true
-	cfg.Plugins.Enabled = true
-	cfg.Plugins.Dir = t.TempDir()
-	var deletes atomic.Int32
-	service := &Service{cfg: cfg, homePluginDeleteTask: func(_ context.Context, _ *config.Config, task home.PluginTask) homeplugins.SyncReport {
-		deletes.Add(1)
-		return homeplugins.DeleteWithReport(context.Background(), nil, nil, task.ID, task.PluginID)
-	}}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.startHomeSubscriber(ctx)
-
-	for name, observed := range map[string]<-chan struct{}{
-		"plugin sync":   pluginSync,
-		"plugin tasks":  pluginTasks,
-		"plugin status": pluginStatus,
-	} {
-		select {
-		case <-observed:
-			t.Fatalf("initial overlay staged %s before subscription ACK and fresh command probe", name)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-	if gotDeletes := deletes.Load(); gotDeletes != 0 {
-		t.Fatalf("initial overlay executed %d plugin deletes before subscription ACK and fresh command probe", gotDeletes)
-	}
-	service.homeMu.Lock()
-	client := service.homeClient
-	registry := service.homeRegistry
-	service.homeMu.Unlock()
-	if client != nil || registry != nil || home.Current() != nil {
-		t.Fatal("initial overlay exposed its Home client or registry before subscription ACK")
-	}
-
-	close(allowAck)
-	select {
-	case <-freshCommandProbe:
-	case <-time.After(time.Second):
-		t.Fatal("subscription ACK did not rebuild and probe a fresh command connection")
-	}
-	for name, observed := range map[string]<-chan struct{}{
-		"plugin sync":  pluginSync,
-		"plugin tasks": pluginTasks,
-	} {
-		select {
-		case <-observed:
-		case <-time.After(time.Second):
-			t.Fatalf("ready Home lifetime did not stage %s after subscription ACK and fresh command probe", name)
-		}
-	}
-	for range 2 {
-		select {
-		case <-pluginStatus:
-		case <-time.After(time.Second):
-			t.Fatal("ready Home lifetime did not flush staged plugin reports")
-		}
-	}
-	if gotDeletes := deletes.Load(); gotDeletes != 1 {
-		t.Fatalf("ready Home lifetime executed %d plugin deletes, want 1", gotDeletes)
-	}
-	if waitForServiceRegistry(t, service, time.Second) == nil || home.Current() == nil {
-		t.Fatal("subscription ACK did not expose the Home client and registry")
-	}
-}
-
-func TestServiceDiscardsStalePreACKPluginWork(t *testing.T) {
-	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
-	if errListen != nil {
-		t.Fatalf("listen: %v", errListen)
-	}
-	firstSubscribed := make(chan struct{})
-	secondSubscribed := make(chan struct{})
-	allowSecondAck := make(chan struct{})
-	stop := make(chan struct{})
-	serverDone := make(chan struct{})
-	var subscriptions atomic.Int32
-	var pluginWrites atomic.Int32
-	go func() {
-		defer close(serverDone)
-		for {
-			conn, errAccept := listener.Accept()
-			if errAccept != nil {
-				return
-			}
-			go serveStalePreACKPluginConnection(conn, &subscriptions, &pluginWrites, firstSubscribed, secondSubscribed, allowSecondAck, stop)
-		}
-	}()
-	t.Cleanup(func() {
-		close(stop)
-		_ = listener.Close()
-		<-serverDone
-		home.ClearCurrent()
+	port, _ := strconv.Atoi(portText)
+	return home.New(internalconfig.HomeConfig{
+		Enabled:                 true,
+		Host:                    host,
+		Port:                    port,
+		DisableClusterDiscovery: true,
 	})
-
-	host, portText, errSplit := net.SplitHostPort(listener.Addr().String())
-	if errSplit != nil {
-		t.Fatalf("split listener address: %v", errSplit)
-	}
-	port, errPort := strconv.Atoi(portText)
-	if errPort != nil {
-		t.Fatalf("parse port: %v", errPort)
-	}
-	cfg := &config.Config{}
-	cfg.Home.Enabled = true
-	cfg.Home.Host = host
-	cfg.Home.Port = port
-	cfg.Home.NodeID = "node-1"
-	cfg.Home.DisableClusterDiscovery = true
-	cfg.Plugins.Enabled = true
-	cfg.Plugins.Dir = t.TempDir()
-	service := &Service{cfg: cfg}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.startHomeSubscriber(ctx)
-	select {
-	case <-firstSubscribed:
-	case <-time.After(time.Second):
-		t.Fatal("first subscriber did not stage plugin work before ACK")
-	}
-
-	replaced := make(chan struct{})
-	go func() {
-		service.startHomeSubscriber(ctx)
-		close(replaced)
-	}()
-	select {
-	case <-secondSubscribed:
-	case <-time.After(time.Second):
-		t.Fatal("replacement subscriber did not reach subscription ACK")
-	}
-	if got := pluginWrites.Load(); got != 0 {
-		t.Fatalf("stale pre-ACK lifetime flushed %d plugin reports", got)
-	}
-	close(allowSecondAck)
-	deadline := time.Now().Add(time.Second)
-	for pluginWrites.Load() != 1 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if got := pluginWrites.Load(); got != 1 {
-		t.Fatalf("replacement lifetime plugin reports = %d, want 1", got)
-	}
-	if waitForServiceRegistry(t, service, time.Second) == nil {
-		t.Fatal("replacement subscription did not expose a ready registry")
-	}
-	select {
-	case <-replaced:
-	case <-time.After(time.Second):
-		t.Fatal("replacement subscriber did not finish setup")
-	}
 }
-
 func TestServiceExplicitReplacementDrainsPendingAndScopeBeforeStartingNewLifetime(t *testing.T) {
 	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
 	if errListen != nil {
@@ -1792,262 +1587,6 @@ func TestServiceBacksOffAfterRepeatedPreAckFailures(t *testing.T) {
 	}
 }
 
-func TestServiceHeartbeatLossCancelsBlockedConfigFinalizationWithoutDrainingRegistry(t *testing.T) {
-	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
-	if errListen != nil {
-		t.Fatalf("listen: %v", errListen)
-	}
-	update := make(chan struct{})
-	statusStarted := make(chan struct{})
-	statusRelease := make(chan struct{})
-	secondConfig := make(chan struct{})
-	var configRequests atomic.Int32
-	var statusWrites atomic.Int32
-	stop := make(chan struct{})
-	serverDone := make(chan struct{})
-	go func() {
-		defer close(serverDone)
-		for {
-			conn, errAccept := listener.Accept()
-			if errAccept != nil {
-				return
-			}
-			go serveBlockedFinalizationConnection(conn, &configRequests, &statusWrites, update, statusStarted, statusRelease, secondConfig, stop)
-		}
-	}()
-	t.Cleanup(func() {
-		close(stop)
-		close(statusRelease)
-		_ = listener.Close()
-		<-serverDone
-		home.ClearCurrent()
-	})
-
-	service := newRegistryTestService(t, listener)
-	service.cfg.Home.NodeID = "node-1"
-	service.homePluginSyncKey = homePluginSyncKey(service.cfg)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.startHomeSubscriber(ctx)
-	registry := waitForServiceRegistry(t, service, time.Second)
-	pending, errBegin := registry.BeginDispatch()
-	if errBegin != nil {
-		t.Fatal(errBegin)
-	}
-	scope, errInstall := registry.Install(pending, executionregistry.ScopeSpec{})
-	if errInstall != nil {
-		t.Fatal(errInstall)
-	}
-	resourceClosed := make(chan struct{})
-	if errBind := scope.Bind(func() error {
-		close(resourceClosed)
-		go scope.End("canceled")
-		return nil
-	}); errBind != nil {
-		t.Fatal(errBind)
-	}
-
-	close(update)
-	select {
-	case <-statusStarted:
-	case <-time.After(time.Second):
-		t.Fatal("updated config did not enter blocked finalization")
-	}
-	select {
-	case <-resourceClosed:
-		t.Fatal("heartbeat loss drained the active execution")
-	case <-time.After(200 * time.Millisecond):
-	}
-	select {
-	case <-secondConfig:
-	case <-time.After(time.Second):
-		t.Fatal("subscriber did not retry after heartbeat loss")
-	}
-	service.homeMu.Lock()
-	currentRegistry := service.homeRegistry
-	currentClient := service.homeClient
-	service.homeMu.Unlock()
-	if currentRegistry != nil || currentClient != nil || home.Current() != nil {
-		t.Fatal("heartbeat-lost lifetime left a published Home client or registry")
-	}
-	scope.End("completed")
-}
-
-func TestServiceConfigWorkerFinalizesRapidUpdatesInOrder(t *testing.T) {
-	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
-	if errListen != nil {
-		t.Fatalf("listen: %v", errListen)
-	}
-	updates := make(chan struct{})
-	statuses := make(chan homeplugins.SyncReport, 4)
-	var taskRequests atomic.Int32
-	stop := make(chan struct{})
-	serverDone := make(chan struct{})
-	go func() {
-		defer close(serverDone)
-		for {
-			conn, errAccept := listener.Accept()
-			if errAccept != nil {
-				return
-			}
-			go serveOrderedConfigUpdatesConnection(conn, &taskRequests, updates, statuses, stop)
-		}
-	}()
-	t.Cleanup(func() {
-		close(stop)
-		_ = listener.Close()
-		<-serverDone
-		home.ClearCurrent()
-	})
-
-	service := newRegistryTestService(t, listener)
-	service.cfg.Home.NodeID = "node-1"
-	service.homePluginSyncKey = homePluginSyncKey(service.cfg)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	service.startHomeSubscriber(ctx)
-	waitForServiceRegistry(t, service, time.Second)
-	close(updates)
-
-	gotTaskIDs := make([]uint, 0, 2)
-	for len(gotTaskIDs) < 2 {
-		select {
-		case report := <-statuses:
-			if report.TaskID != 0 {
-				gotTaskIDs = append(gotTaskIDs, report.TaskID)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("rapid config updates did not finalize all ordered task work")
-		}
-	}
-	wantTaskIDs := []uint{1, 2}
-	for index := range wantTaskIDs {
-		if gotTaskIDs[index] != wantTaskIDs[index] {
-			t.Fatalf("plugin task status IDs = %v, want %v", gotTaskIDs, wantTaskIDs)
-		}
-	}
-}
-
-func serveBlockedFinalizationConnection(conn net.Conn, configRequests, statusWrites *atomic.Int32, update <-chan struct{}, statusStarted chan<- struct{}, statusRelease <-chan struct{}, secondConfig chan<- struct{}, stop <-chan struct{}) {
-	defer func() { _ = conn.Close() }()
-	reader := bufio.NewReader(conn)
-	for {
-		args, errRead := readRegistryTestRedisCommand(reader)
-		if errRead != nil {
-			return
-		}
-		switch {
-		case len(args) > 0 && strings.EqualFold(args[0], "HELLO"):
-			if _, errWrite := io.WriteString(conn, "%6\r\n$6\r\nserver\r\n$5\r\nredis\r\n$5\r\nproto\r\n:3\r\n$2\r\nid\r\n:1\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$7\r\nmodules\r\n*0\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "config":
-			if configRequests.Add(1) > 1 {
-				select {
-				case secondConfig <- struct{}{}:
-				case <-stop:
-				}
-				_, _ = io.WriteString(conn, "-ERR unavailable\r\n")
-				return
-			}
-			writeRegistryTestConfig(conn, "credential-concurrency:\n  lifecycle-config-revision: 1\n  cpa-heartbeat-timeout: 100ms\n  cpa-cancel-bound: 100ms\n")
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			_, _ = io.WriteString(conn, "$-1\r\n")
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-sync":
-			payload := fmt.Sprintf(`{"schema_version":1,"expires_at":%q,"items":[]}`, time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano))
-			writeRegistryTestConfig(conn, payload)
-		case len(args) >= 2 && strings.EqualFold(args[0], "RPUSH") && args[1] == "plugin-status":
-			if statusWrites.Add(1) == 1 {
-				if _, errWrite := io.WriteString(conn, ":1\r\n"); errWrite != nil {
-					return
-				}
-				continue
-			}
-			select {
-			case statusStarted <- struct{}{}:
-			case <-stop:
-				return
-			}
-			select {
-			case <-statusRelease:
-				return
-			case <-stop:
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "SUBSCRIBE") && args[1] == "config":
-			if _, errWrite := io.WriteString(conn, "*3\r\n$9\r\nsubscribe\r\n$6\r\nconfig\r\n:1\r\n"); errWrite != nil {
-				return
-			}
-			select {
-			case <-update:
-				writeRegistryTestMessage(conn, "credential-concurrency:\n  lifecycle-config-revision: 2\n  cpa-heartbeat-timeout: 100ms\n  cpa-cancel-bound: 100ms\nplugins:\n  enabled: true\n")
-			case <-stop:
-				return
-			}
-			<-stop
-			return
-		default:
-			if _, errWrite := io.WriteString(conn, "+OK\r\n"); errWrite != nil {
-				return
-			}
-		}
-	}
-}
-
-func serveOrderedConfigUpdatesConnection(conn net.Conn, taskRequests *atomic.Int32, updates <-chan struct{}, statuses chan<- homeplugins.SyncReport, stop <-chan struct{}) {
-	defer func() { _ = conn.Close() }()
-	reader := bufio.NewReader(conn)
-	for {
-		args, errRead := readRegistryTestRedisCommand(reader)
-		if errRead != nil {
-			return
-		}
-		switch {
-		case len(args) > 0 && strings.EqualFold(args[0], "HELLO"):
-			_, _ = io.WriteString(conn, "%6\r\n$6\r\nserver\r\n$5\r\nredis\r\n$5\r\nproto\r\n:3\r\n$2\r\nid\r\n:1\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$7\r\nmodules\r\n*0\r\n")
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "config":
-			writeRegistryTestConfig(conn, "credential-concurrency:\n  lifecycle-config-revision: 1\n  cpa-heartbeat-timeout: 1s\n  cpa-cancel-bound: 100ms\n")
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-sync":
-			payload := fmt.Sprintf(`{"schema_version":1,"expires_at":%q,"items":[]}`, time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano))
-			writeRegistryTestConfig(conn, payload)
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			request := taskRequests.Add(1)
-			if request == 1 {
-				_, _ = io.WriteString(conn, "$-1\r\n")
-				continue
-			}
-			payload := fmt.Sprintf(`[{"id":%d,"operation":"delete","plugin_id":"plugin-%d"}]`, request-1, request-1)
-			writeRegistryTestConfig(conn, payload)
-		case len(args) >= 3 && strings.EqualFold(args[0], "RPUSH") && args[1] == "plugin-status":
-			var report homeplugins.SyncReport
-			if errUnmarshal := json.Unmarshal([]byte(args[2]), &report); errUnmarshal != nil {
-				return
-			}
-			select {
-			case statuses <- report:
-			case <-stop:
-				return
-			}
-			_, _ = io.WriteString(conn, ":1\r\n")
-		case len(args) >= 2 && strings.EqualFold(args[0], "SUBSCRIBE") && args[1] == "config":
-			if _, errWrite := io.WriteString(conn, "*3\r\n$9\r\nsubscribe\r\n$6\r\nconfig\r\n:1\r\n"); errWrite != nil {
-				return
-			}
-			select {
-			case <-updates:
-				writeRegistryTestMessage(conn, "credential-concurrency:\n  lifecycle-config-revision: 2\n  cpa-heartbeat-timeout: 1s\n  cpa-cancel-bound: 100ms\nplugins:\n  enabled: true\n")
-				writeRegistryTestMessage(conn, "credential-concurrency:\n  lifecycle-config-revision: 3\n  cpa-heartbeat-timeout: 1s\n  cpa-cancel-bound: 100ms\n")
-			case <-stop:
-				return
-			}
-			<-stop
-			return
-		default:
-			_, _ = io.WriteString(conn, "+OK\r\n")
-		}
-	}
-}
-
 func writeRegistryTestConfig(conn net.Conn, payload string) {
 	_, _ = io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload))
 }
@@ -2282,10 +1821,6 @@ func serveHomeLogForwarderReconnectConnection(conn net.Conn, acks chan<- struct{
 			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
 				return
 			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			if _, errWrite := io.WriteString(conn, "$2\r\n[]\r\n"); errWrite != nil {
-				return
-			}
 		case len(args) >= 2 && strings.EqualFold(args[0], "SUBSCRIBE") && args[1] == "config":
 			if _, errWrite := io.WriteString(conn, "*3\r\n$9\r\nsubscribe\r\n$6\r\nconfig\r\n:1\r\n"); errWrite != nil {
 				return
@@ -2358,10 +1893,6 @@ func servePublisherReplacementConnection(conn net.Conn, configRequests *atomic.I
 			}
 			payload := fmt.Sprintf("credential-concurrency:\n  lifecycle-config-revision: %d\n  observation-barrier-revision: %d\n  cpa-heartbeat-timeout: 100ms\n  cpa-cancel-bound: 100ms\ncredential-in-flight:\n  snapshot-interval: 10ms\n", request, barrierRevision)
 			writeRegistryTestConfig(conn, payload)
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			if _, errWrite := io.WriteString(conn, "$2\r\n[]\r\n"); errWrite != nil {
-				return
-			}
 		case len(args) > 0 && strings.EqualFold(args[0], "PING"):
 			if _, errWrite := io.WriteString(conn, "+PONG\r\n"); errWrite != nil {
 				return
@@ -2469,10 +2000,6 @@ func serveSuccessChainHomeConnection(conn net.Conn, configMu *sync.Mutex, config
 			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
 				return
 			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			if _, errWrite := io.WriteString(conn, "$2\r\n[]\r\n"); errWrite != nil {
-				return
-			}
 		case len(args) >= 2 && strings.EqualFold(args[0], "SUBSCRIBE") && args[1] == "config":
 			configMu.Lock()
 			request := *configRequests
@@ -2508,137 +2035,6 @@ func serveSuccessChainHomeConnection(conn net.Conn, configMu *sync.Mutex, config
 	}
 }
 
-func serveStalePreACKPluginConnection(conn net.Conn, subscriptions *atomic.Int32, pluginWrites *atomic.Int32, firstSubscribed chan struct{}, secondSubscribed chan struct{}, allowSecondAck chan struct{}, stop chan struct{}) {
-	defer func() { _ = conn.Close() }()
-	reader := bufio.NewReader(conn)
-	for {
-		args, errRead := readRegistryTestRedisCommand(reader)
-		if errRead != nil {
-			return
-		}
-		switch {
-		case len(args) > 0 && strings.EqualFold(args[0], "HELLO"):
-			if _, errWrite := io.WriteString(conn, "%6\r\n$6\r\nserver\r\n$5\r\nredis\r\n$5\r\nproto\r\n:3\r\n$2\r\nid\r\n:1\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$7\r\nmodules\r\n*0\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "config":
-			payload := "credential-concurrency:\n  lifecycle-config-revision: 1\n  cpa-heartbeat-timeout: 100ms\n  cpa-cancel-bound: 100ms\nplugins:\n  enabled: true\n"
-			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-sync":
-			payload := fmt.Sprintf(`{"schema_version":1,"expires_at":%q,"items":[]}`, time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano))
-			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			if _, errWrite := io.WriteString(conn, "$-1\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) > 0 && strings.EqualFold(args[0], "PING"):
-			if _, errWrite := io.WriteString(conn, "+PONG\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "RPUSH") && args[1] == "plugin-status":
-			pluginWrites.Add(1)
-			if _, errWrite := io.WriteString(conn, ":1\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "SUBSCRIBE") && args[1] == "config":
-			subscription := subscriptions.Add(1)
-			switch subscription {
-			case 1:
-				close(firstSubscribed)
-				<-stop
-				return
-			case 2:
-				close(secondSubscribed)
-				select {
-				case <-allowSecondAck:
-				case <-stop:
-					return
-				}
-				if _, errWrite := io.WriteString(conn, "*3\r\n$9\r\nsubscribe\r\n$6\r\nconfig\r\n:1\r\n"); errWrite != nil {
-					return
-				}
-				<-stop
-				return
-			}
-		default:
-			if _, errWrite := io.WriteString(conn, "+OK\r\n"); errWrite != nil {
-				return
-			}
-		}
-	}
-}
-
-func serveInitialOverlayPluginConnection(conn net.Conn, pluginSync chan struct{}, pluginStatus chan struct{}, pluginTasks chan struct{}, freshCommandProbe chan struct{}, allowAck chan struct{}, stop chan struct{}) {
-	defer func() { _ = conn.Close() }()
-	reader := bufio.NewReader(conn)
-	for {
-		args, errRead := readRegistryTestRedisCommand(reader)
-		if errRead != nil {
-			return
-		}
-		switch {
-		case len(args) > 0 && strings.EqualFold(args[0], "HELLO"):
-			if _, errWrite := io.WriteString(conn, "%6\r\n$6\r\nserver\r\n$5\r\nredis\r\n$5\r\nproto\r\n:3\r\n$2\r\nid\r\n:1\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$7\r\nmodules\r\n*0\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "config":
-			payload := "credential-concurrency:\n  lifecycle-config-revision: 1\n  cpa-heartbeat-timeout: 100ms\n  cpa-cancel-bound: 100ms\nplugins:\n  enabled: true\n"
-			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-sync":
-			if home.Current() != nil {
-				return
-			}
-			close(pluginSync)
-			payload := fmt.Sprintf(`{"schema_version":1,"expires_at":%q,"items":[]}`, time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano))
-			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "RPUSH") && args[1] == "plugin-status":
-			select {
-			case <-freshCommandProbe:
-			default:
-				return
-			}
-			pluginStatus <- struct{}{}
-			if _, errWrite := io.WriteString(conn, ":1\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			close(pluginTasks)
-			payload := `[{"id":1,"operation":"delete","plugin_id":"plugin-a"}]`
-			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
-				return
-			}
-		case len(args) > 0 && strings.EqualFold(args[0], "PING"):
-			close(freshCommandProbe)
-			if _, errWrite := io.WriteString(conn, "+PONG\r\n"); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "SUBSCRIBE") && args[1] == "config":
-			select {
-			case <-allowAck:
-			case <-stop:
-				return
-			}
-			if _, errWrite := io.WriteString(conn, "*3\r\n$9\r\nsubscribe\r\n$6\r\nconfig\r\n:1\r\n"); errWrite != nil {
-				return
-			}
-			<-stop
-			return
-		default:
-			if _, errWrite := io.WriteString(conn, "+OK\r\n"); errWrite != nil {
-				return
-			}
-		}
-	}
-}
-
 func serveRegistryTestHomeConnection(conn net.Conn, subscriptionMu *sync.Mutex, subscriptions *int, firstAck chan struct{}, loseFirst chan struct{}, secondSubscribe chan struct{}, secondSubscribeOnce *sync.Once, allowSecondAck chan struct{}, stop chan struct{}) {
 	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
@@ -2655,10 +2051,6 @@ func serveRegistryTestHomeConnection(conn net.Conn, subscriptionMu *sync.Mutex, 
 		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "config":
 			payload := "credential-concurrency:\n  lifecycle-config-revision: 1\n  cpa-heartbeat-timeout: 100ms\n  cpa-cancel-bound: 100ms\n"
 			if _, errWrite := io.WriteString(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(payload), payload)); errWrite != nil {
-				return
-			}
-		case len(args) >= 2 && strings.EqualFold(args[0], "GET") && args[1] == "plugin-tasks":
-			if _, errWrite := io.WriteString(conn, "$2\r\n[]\r\n"); errWrite != nil {
 				return
 			}
 		case len(args) >= 2 && strings.EqualFold(args[0], "SUBSCRIBE") && args[1] == "config":
@@ -2776,9 +2168,9 @@ func TestServiceSkipsStaleLocalConfigRuntimeApply(t *testing.T) {
 
 func TestServiceAppliesSameValueNewestSelectorCommit(t *testing.T) {
 	manager := coreauth.NewManager(nil, &coreauth.RoundRobinSelector{}, nil)
-	manager.RegisterExecutor(serviceTestPluginExecutor{})
+	manager.RegisterExecutor(serviceTestCustomExecutor{})
 	for _, id := range []string{"auth-b", "auth-a"} {
-		if _, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: id, Provider: "plugin-provider", Status: coreauth.StatusActive}); errRegister != nil {
+		if _, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: id, Provider: "custom-provider", Status: coreauth.StatusActive}); errRegister != nil {
 			t.Fatalf("Register(%s) error = %v", id, errRegister)
 		}
 	}
@@ -2794,7 +2186,7 @@ func TestServiceAppliesSameValueNewestSelectorCommit(t *testing.T) {
 	}
 
 	for range 2 {
-		selected, errSelect := manager.SelectAuth(context.Background(), "plugin-provider", "", cliproxyexecutor.Options{})
+		selected, errSelect := manager.SelectAuth(context.Background(), "custom-provider", "", cliproxyexecutor.Options{})
 		if errSelect != nil {
 			t.Fatalf("SelectAuth() error = %v", errSelect)
 		}
@@ -2997,7 +2389,7 @@ func TestServiceSerializesHomeAndWatcherConfigRuntimeApply(t *testing.T) {
 		appliedMu.Unlock()
 		return true
 	}
-	client, _ := newHomePluginTaskTestClient(t, nil, 0)
+	client := newHomeConfigTestClient(t)
 	queue := newHomeConfigWorkQueue()
 	queue.enqueue([]byte("routing:\n  strategy: fill-first\n"))
 	ready := make(chan struct{})

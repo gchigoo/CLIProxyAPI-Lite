@@ -16,8 +16,7 @@ func ApplyThinkingWithSourcePayload(body, currentSourcePayload, originalSourcePa
 	return thinking.ApplyThinkingWithSummary(body, model, fromFormat, toFormat, providerKey, summary)
 }
 
-// translatedRequestSummaryConfig gives the translated target payload precedence
-// so a plugin request normalizer can remove or rewrite a canonical summary field.
+// translatedRequestSummaryConfig gives the translated target payload precedence.
 // The original source is consulted only when the payload that was translated no
 // longer carries the inbound intent, or when the target could not represent that
 // intent until model-aware thinking is applied later (notably Claude).
@@ -51,9 +50,8 @@ func translatedRequestSummaryConfig(body, currentSourcePayload, originalSourcePa
 
 	candidate := thinking.ApplySummaryConfigForModel(body, toFormat, model, currentSummary)
 	if thinking.ExtractExplicitSummaryConfig(candidate, toFormat).Mode != thinking.SummaryUnspecified {
-		// Registry translation applied this field before plugin normalization. If
-		// it is absent now but can be represented on the normalized body, the
-		// normalizer deliberately removed it and must remain authoritative.
+		// Registry translation applied this field. If it is absent now but can
+		// be represented on the normalized body, the modification is authoritative.
 		return thinking.SummaryConfig{}
 	}
 

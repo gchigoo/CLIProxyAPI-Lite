@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -57,9 +56,6 @@ const idempotencyKeyMetadataKey = "idempotency_key"
 const (
 	defaultStreamingKeepAliveSeconds = 0
 	defaultStreamingBootstrapRetries = 0
-	// Stream interceptor history is intentionally bounded and not configurable in the first SDK surface.
-	maxStreamInterceptorHistoryChunks = 64
-	maxStreamInterceptorHistoryBytes  = 1 << 20
 )
 
 // BuildErrorResponseBody builds an OpenAI-compatible JSON error response body.
@@ -357,13 +353,6 @@ type BaseAPIHandler struct {
 
 	// Cfg holds the current application configuration.
 	Cfg *config.SDKConfig
-
-	// PluginHost optionally applies plugin interceptors around upstream execution.
-	PluginHost PluginInterceptorHost
-
-	// ModelRouterHost optionally routes matching requests to a plugin executor, the router's own
-	// executor, or a built-in provider before model-to-provider resolution and auth selection.
-	ModelRouterHost PluginModelRouterHost
 }
 
 // NewBaseAPIHandlers creates a new API handlers instance.
@@ -389,52 +378,6 @@ func NewBaseAPIHandlers(cfg *config.SDKConfig, authManager *coreauth.Manager) *B
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
 func (h *BaseAPIHandler) UpdateClients(cfg *config.SDKConfig) { h.Cfg = cfg }
-
-// SetPluginHost configures the optional plugin interceptor host.
-func (h *BaseAPIHandler) SetPluginHost(host PluginInterceptorHost) {
-	if h == nil {
-		return
-	}
-	if isNilPluginInterceptorHost(host) {
-		h.PluginHost = nil
-		return
-	}
-	h.PluginHost = host
-}
-
-// SetModelRouterHost configures the optional plugin model router host.
-func (h *BaseAPIHandler) SetModelRouterHost(host PluginModelRouterHost) {
-	if h == nil {
-		return
-	}
-	if isNilPluginModelRouterHost(host) {
-		h.ModelRouterHost = nil
-		return
-	}
-	h.ModelRouterHost = host
-}
-
-func isNilPluginInterceptorHost(host PluginInterceptorHost) bool {
-	return isNilInterface(host)
-}
-
-func isNilPluginModelRouterHost(host PluginModelRouterHost) bool {
-	return isNilInterface(host)
-}
-
-func isNilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	// A typed nil pointer stored in an interface is not equal to nil.
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
-}
 
 // GetAlt extracts the 'alt' parameter from the request query string.
 // It checks both 'alt' and '$alt' parameters and returns the appropriate value.
@@ -659,3 +602,17 @@ func appendAPIResponse(c *gin.Context, data []byte) {
 // APIHandlerCancelFunc is a function type for canceling an API handler's context.
 // It can optionally accept parameters, which are used for logging the response.
 type APIHandlerCancelFunc func(params ...interface{})
+
+func cloneHeader(src http.Header) http.Header {
+	if src == nil {
+		return nil
+	}
+	return src.Clone()
+}
+
+func downstreamHeadersFromExecutor(headers http.Header, passthrough bool) http.Header {
+	if !passthrough {
+		return nil
+	}
+	return FilterUpstreamHeaders(headers)
+}

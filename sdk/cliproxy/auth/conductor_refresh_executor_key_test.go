@@ -49,7 +49,7 @@ func TestRefreshAuthForRequest_UsesExecutorKeyFromAuth(t *testing.T) {
 
 	auth := &Auth{
 		ID:       "compat-oauth",
-		Provider: "plugin-provider",
+		Provider: "custom-provider",
 		Attributes: map[string]string{
 			"compat_name":  "custom",
 			"provider_key": "custom",

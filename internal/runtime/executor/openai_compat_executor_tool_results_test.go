@@ -24,7 +24,9 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 		{name: "non-stream text-only", stream: false, inputModalities: []string{"text"}, wantString: true},
 		{name: "stream text-only", stream: true, inputModalities: []string{"text"}, wantString: true},
 		{name: "non-stream multimodal", stream: false, inputModalities: []string{"text", "image"}, wantString: false},
+		{name: "stream multimodal", stream: true, inputModalities: []string{"text", "image"}, wantString: false},
 		{name: "non-stream unspecified", stream: false, inputModalities: nil, wantString: false},
+		{name: "stream unspecified", stream: true, inputModalities: nil, wantString: false},
 	}
 
 	for _, tt := range tests {
@@ -84,16 +86,22 @@ func TestOpenAICompatExecutorToolResultContentByInputModalities(t *testing.T) {
 			}
 
 			toolContent := gjson.GetBytes(gotBody, "messages.1.content")
+			if toolContent.Type != gjson.String {
+				t.Fatalf("tool content type = %s, want string; body=%s", toolContent.Type, string(gotBody))
+			}
 			if tt.wantString {
-				if toolContent.Type != gjson.String {
-					t.Fatalf("tool content type = %s, want string; body=%s", toolContent.Type, string(gotBody))
-				}
 				want := "image inspected\n\n[image omitted: unsupported by upstream]"
 				if toolContent.String() != want {
 					t.Fatalf("tool content = %q, want %q", toolContent.String(), want)
 				}
-			} else if !toolContent.IsArray() {
-				t.Fatalf("tool content type = %s, want array; body=%s", toolContent.Type, string(gotBody))
+				if gjson.GetBytes(gotBody, "messages.#").Int() != 2 {
+					t.Fatalf("text-only model received a relayed image message: %s", gotBody)
+				}
+			} else {
+				if toolContent.String() != "image inspected" || gjson.GetBytes(gotBody, "messages.2.role").String() != "user" ||
+					gjson.GetBytes(gotBody, "messages.2.content.1.image_url.url").String() != "data:image/png;base64,AA==" {
+					t.Fatalf("multimodal tool image was not relayed to a user message: %s", gotBody)
+				}
 			}
 		})
 	}

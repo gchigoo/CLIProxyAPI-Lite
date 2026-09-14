@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [personal/main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test -p 4 ./...
+      - name: Build
+        run: go build -trimpath -ldflags="-s -w" -o test-output ./cmd/server

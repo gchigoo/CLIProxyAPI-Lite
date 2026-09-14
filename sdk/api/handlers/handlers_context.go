@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/context"
@@ -14,56 +13,9 @@ type pinnedAuthContextKey struct{}
 
 type selectedAuthCallbackContextKey struct{}
 
-type preparedModelRouteContextKey struct{}
-
 type executionSessionContextKey struct{}
 
 type disallowFreeAuthContextKey struct{}
-
-type nestedExecutionTrackerKey struct{}
-
-type nestedExecutionTracker struct {
-	mu     sync.Mutex
-	called bool
-}
-
-func (t *nestedExecutionTracker) mark() {
-	if t == nil {
-		return
-	}
-	t.mu.Lock()
-	t.called = true
-	t.mu.Unlock()
-}
-
-func (t *nestedExecutionTracker) hasNestedExecution() bool {
-	if t == nil {
-		return false
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.called
-}
-
-func withNestedExecutionTracker(ctx context.Context) (context.Context, *nestedExecutionTracker) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if existing, ok := ctx.Value(nestedExecutionTrackerKey{}).(*nestedExecutionTracker); ok && existing != nil {
-		return ctx, existing
-	}
-	tracker := &nestedExecutionTracker{}
-	return context.WithValue(ctx, nestedExecutionTrackerKey{}, tracker), tracker
-}
-
-func markNestedExecution(ctx context.Context) {
-	if ctx == nil {
-		return
-	}
-	if tracker, ok := ctx.Value(nestedExecutionTrackerKey{}).(*nestedExecutionTracker); ok && tracker != nil {
-		tracker.mark()
-	}
-}
 
 // WithPinnedAuthID returns a child context that requests execution on a specific auth ID.
 func WithPinnedAuthID(ctx context.Context, authID string) context.Context {
@@ -86,29 +38,6 @@ func WithSelectedAuthIDCallback(ctx context.Context, callback func(string)) cont
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, selectedAuthCallbackContextKey{}, callback)
-}
-
-// PrepareStreamModelRoute resolves a stream route once and stores it on the returned context for execution.
-// The boolean reports whether the route overrides normal model-to-provider resolution.
-func (h *BaseAPIHandler) PrepareStreamModelRoute(ctx context.Context, handlerType string, modelName string, rawJSON []byte) (context.Context, bool) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	decision := h.applyModelRouter(ctx, handlerType, modelName, rawJSON, true, modelExecutionOptions{})
-	ctx = context.WithValue(ctx, preparedModelRouteContextKey{}, decision)
-	hasOverride := strings.TrimSpace(decision.ExecutorPluginID) != "" || strings.TrimSpace(decision.Provider) != ""
-	return ctx, hasOverride
-}
-
-func preparedModelRouteFromContext(ctx context.Context, skipRouterPluginID string) (modelRouteDecision, bool) {
-	// A host.model.execute_stream callback is a nested execution. Its caller is
-	// excluded from model routing, so an outer prepared route cannot be reused:
-	// it may point straight back at that caller.
-	if ctx == nil || strings.TrimSpace(skipRouterPluginID) != "" {
-		return modelRouteDecision{}, false
-	}
-	decision, ok := ctx.Value(preparedModelRouteContextKey{}).(modelRouteDecision)
-	return decision, ok
 }
 
 // WithExecutionSessionID returns a child context tagged with a long-lived execution session ID.

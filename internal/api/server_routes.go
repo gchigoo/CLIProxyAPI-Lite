@@ -29,13 +29,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers/openai"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
 
 const oauthCallbackSuccessHTML = `<html><head><meta charset="utf-8"><title>Authentication successful</title><script>setTimeout(function(){window.close();},5000);</script></head><body><h1>Authentication successful!</h1><p>You can close this window.</p><p>This window will close automatically in 5 seconds.</p></body></html>`
-
-const codexAlphaSearchSourceFormat = "codex-alpha-search"
 
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
@@ -187,61 +184,6 @@ func (s *Server) setupRoutes() {
 	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
 }
 
-func (s *Server) codexAlphaSearchModelRouterHost() handlers.PluginModelRouterHost {
-	if s == nil {
-		return nil
-	}
-	if s.pluginHost != nil {
-		return s.pluginHost
-	}
-	if s.handlers != nil && s.handlers.ModelRouterHost != nil {
-		return s.handlers.ModelRouterHost
-	}
-	return nil
-}
-
-func (s *Server) codexAlphaSearchSelectionModel(ctx context.Context, c *gin.Context, body []byte, model string) (string, error) {
-	host := s.codexAlphaSearchModelRouterHost()
-	if host == nil {
-		return model, nil
-	}
-
-	var headers http.Header
-	queryValues := make(map[string][]string)
-	requestPath := ""
-	if c != nil && c.Request != nil {
-		headers = c.Request.Header.Clone()
-		if c.Request.URL != nil {
-			queryValues = c.Request.URL.Query()
-			requestPath = c.Request.URL.Path
-		}
-	}
-	metadata := map[string]any{
-		coreexecutor.RequestedModelMetadataKey: model,
-	}
-	if requestPath != "" {
-		metadata[coreexecutor.RequestPathMetadataKey] = requestPath
-	}
-	resp, handled := host.RouteModel(ctx, pluginapi.ModelRouteRequest{
-		SourceFormat:   codexAlphaSearchSourceFormat,
-		RequestedModel: model,
-		Headers:        headers,
-		Query:          queryValues,
-		Body:           body,
-		Metadata:       metadata,
-	})
-	if !handled || !resp.Handled {
-		return model, nil
-	}
-	if resp.TargetKind != pluginapi.ModelRouteTargetProvider || !strings.EqualFold(strings.TrimSpace(resp.Target), "codex") {
-		return "", fmt.Errorf("unsupported Codex Alpha Search model route target %q (%q)", resp.TargetKind, resp.Target)
-	}
-	if targetModel := strings.TrimSpace(resp.TargetModel); targetModel != "" {
-		return targetModel, nil
-	}
-	return model, nil
-}
-
 func sanitizeCodexAlphaSearchBody(body []byte) []byte {
 	var payload map[string]json.RawMessage
 	if errUnmarshal := json.Unmarshal(body, &payload); errUnmarshal != nil || payload == nil {
@@ -333,12 +275,7 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 	}
 	ctx := context.WithValue(c.Request.Context(), "gin", c)
 	ctx = handlers.EnrichContextWithSessionHierarchy(ctx, selectionHeaders, body, nil)
-	selectionModel, errRoute := s.codexAlphaSearchSelectionModel(ctx, c, body, strings.TrimSpace(routing.Model))
-	if errRoute != nil {
-		log.WithError(errRoute).Warn("codex alpha search: model router returned an unsupported target")
-		c.JSON(clienterror.HTTPStatusFromErrorOr(errRoute, http.StatusServiceUnavailable), gin.H{"error": errRoute.Error()})
-		return
-	}
+	selectionModel := strings.TrimSpace(routing.Model)
 	selectionOpts := coreexecutor.Options{Headers: selectionHeaders, OriginalRequest: body}
 	var selection *auth.HomeDispatchSelection
 	var selected *auth.Auth

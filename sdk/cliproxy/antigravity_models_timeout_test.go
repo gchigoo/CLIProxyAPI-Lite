@@ -245,64 +245,6 @@ func TestAntigravityAsyncProbe_DiscardsStaleProbeWhenAuthReRegistered(t *testing
 	}
 }
 
-// TestAntigravityAsyncProbe_PreservesPluginModels verifies that when an auth has plugin-provided
-// models in addition to native models, the async probe update preserves all plugin models.
-func TestAntigravityAsyncProbe_PreservesPluginModels(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"webSearchModelIds":["gemini-3.1-flash-lite"]}`))
-	}))
-	defer server.Close()
-
-	svc := &Service{
-		cfg: &config.Config{},
-	}
-
-	auth := &coreauth.Auth{
-		ID:       "ag-plugin-preserve",
-		Provider: "antigravity",
-		Attributes: map[string]string{
-			"base_url": server.URL,
-		},
-		Metadata: map[string]any{
-			"access_token": "ya29.test-token",
-		},
-	}
-	t.Cleanup(func() {
-		GlobalModelRegistry().UnregisterClient(auth.ID)
-	})
-
-	// Register baseline models + a plugin model
-	models := registryGetAntigravityModels()
-	models = append(models, &ModelInfo{
-		ID: "plugin-custom-model",
-	})
-	GlobalModelRegistry().RegisterClient(auth.ID, "antigravity", models)
-
-	// Trigger async probe
-	svc.asyncProbeAntigravityCapabilities(context.Background(), auth, "antigravity")
-	svc.WaitAntigravityProbes()
-
-	// Check that plugin model is still present, and native model has web search capability
-	updated := GlobalModelRegistry().GetModelsForClient(auth.ID)
-	foundPlugin := false
-	foundSearch := false
-	for _, m := range updated {
-		if m.ID == "plugin-custom-model" {
-			foundPlugin = true
-		}
-		if m.ID == "gemini-3.1-flash-lite" && m.SupportsWebSearch {
-			foundSearch = true
-		}
-	}
-	if !foundPlugin {
-		t.Fatal("expected plugin-custom-model to be preserved after capability probe")
-	}
-	if !foundSearch {
-		t.Fatal("expected gemini-3.1-flash-lite to have SupportsWebSearch=true")
-	}
-}
-
 // TestAntigravityAsyncProbe_AppliesCapabilitiesToAliasedAndPrefixedModels verifies that when
 // models have OAuth aliases and prefixes applied, the async capability probe correctly maps
 // them back to their upstream model identifiers and applies the probed capabilities.

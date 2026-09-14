@@ -443,9 +443,9 @@ func TestAuthFileEventsDoNotInvokeSnapshotCoreAuths(t *testing.T) {
 
 	origSnapshot := snapshotCoreAuthsFunc
 	var snapshotCalls int32
-	snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string, parser synthesizer.PluginAuthParser) []*coreauth.Auth {
+	snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string) []*coreauth.Auth {
 		atomic.AddInt32(&snapshotCalls, 1)
-		return origSnapshot(cfg, authDir, parser)
+		return origSnapshot(cfg, authDir)
 	}
 	defer func() { snapshotCoreAuthsFunc = origSnapshot }()
 

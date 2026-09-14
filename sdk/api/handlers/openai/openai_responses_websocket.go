@@ -421,12 +421,6 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			requestModelName = strings.TrimSpace(gjson.GetBytes(lastRequest, "model").String())
 		}
 		executionParent := context.WithValue(c.Request.Context(), "gin", c)
-		executionParent, routeOverridesModelResolution := h.PrepareStreamModelRoute(
-			executionParent,
-			h.HandlerType(),
-			requestModelName,
-			payload,
-		)
 		if pinnedAuthID != "" {
 			pinnedAuth, homeRuntime, ok := sessionAuthByIDWithSource(pinnedAuthID)
 			providerKey := ""
@@ -459,7 +453,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				useUpstreamWebsocketPassthrough = provider == "codex" || provider == "xai"
 			}
 		}
-		nativeWebsocketPassthrough := !routeOverridesModelResolution && responsesWebsocketNativePassthroughAllowed(
+		nativeWebsocketPassthrough := responsesWebsocketNativePassthroughAllowed(
 			upstreamMode,
 			useUpstreamWebsocketPassthrough,
 			pinnedAuthID,
@@ -618,13 +612,13 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			attemptedUpstreamMode = upstreamModeForAuth(selectedAuth)
 			preserveNativeOutput.Store(nativeRequest && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
 		})
-		if pinnedAuthID != "" && !routeOverridesModelResolution {
+		if pinnedAuthID != "" {
 			cliCtx = handlers.WithPinnedAuthID(cliCtx, pinnedAuthID)
 		}
 		dataChan, _, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, requestJSON, "")
 		if !selectedAuthObserved {
-			// Plugin/alternate routes bypass auth selection. Keep canonical HTTP-mode
-			// state instead of inheriting the previous pinned websocket mode.
+			// A failure before auth selection leaves no upstream mode to inherit.
+			// Keep canonical HTTP-mode state for this attempt.
 			attemptedUpstreamMode = responsesWebsocketUpstreamModeHTTP
 		}
 		// A connection-scoped continuation cannot rotate credentials in place. Suppress

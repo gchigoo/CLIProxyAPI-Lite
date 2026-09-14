@@ -13,7 +13,6 @@ conv/*
 temp/*
 refs/*
 plugins/*
-examples/plugin/bin/*
 
 # Storage backends
 pgstore/*
@@ -30,7 +29,6 @@ auths/*
 
 # Documentation
 docs/*
-AGENTS.md
 CLAUDE.md
 GEMINI.md
 AGENTS.override.md
@@ -66,3 +64,11 @@ docker-compose.override.yml
 
 # Local LLM Wiki vault
 .llm-wiki
+
+# Private local environments and generated validation output
+.env.*
+!.env.example
+!.env.cluster.example
+*.test
+test-output
+/home

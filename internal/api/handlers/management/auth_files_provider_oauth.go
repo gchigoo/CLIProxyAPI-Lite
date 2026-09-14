@@ -20,10 +20,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/kimi"
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -765,7 +763,7 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		return
 	}
 
-	provider, status, isPlugin, metadata, completed, ok := GetOAuthSessionDetails(state)
+	_, status, completed, ok := GetOAuthSessionDetails(state)
 	if !ok {
 		c.JSON(http.StatusOK, gin.H{"status": "error", "error": "unknown or expired state"})
 		return
@@ -778,104 +776,7 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "error", "error": status})
 		return
 	}
-	h.mu.Lock()
-	host := h.pluginHost
-	h.mu.Unlock()
-	if isPlugin && host != nil && host.HasAuthProvider(provider) {
-		ctx := PopulateAuthContext(context.Background(), c)
-		resp, handled, errPoll := host.PollLogin(ctx, provider, state, metadata)
-		if handled {
-			if errPoll != nil {
-				message := strings.TrimSpace(errPoll.Error())
-				if message == "" {
-					message = "Authentication failed"
-				}
-				SetOAuthSessionError(state, message)
-				c.JSON(http.StatusOK, gin.H{"status": "error", "error": message})
-				return
-			}
-			switch resp.Status {
-			case "", pluginapi.AuthLoginStatusPending:
-				c.JSON(http.StatusOK, gin.H{"status": "wait"})
-				return
-			case pluginapi.AuthLoginStatusError:
-				message := strings.TrimSpace(resp.Message)
-				if message == "" {
-					message = "Authentication failed"
-				}
-				SetOAuthSessionError(state, message)
-				c.JSON(http.StatusOK, gin.H{"status": "error", "error": message})
-				return
-			case pluginapi.AuthLoginStatusSuccess:
-				records := pluginLoginPollAuths(host, resp)
-				if len(records) == 0 {
-					SetOAuthSessionError(state, "Authentication failed")
-					c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Authentication failed"})
-					return
-				}
-				if errSave := h.savePluginLoginRecords(ctx, records); errSave != nil {
-					log.WithError(errSave).WithField("provider", provider).Error("failed to save plugin auth tokens")
-					SetOAuthSessionError(state, "Failed to save authentication tokens")
-					c.JSON(http.StatusOK, gin.H{"status": "error", "error": "Failed to save authentication tokens"})
-					return
-				}
-				CompleteOAuthSession(state)
-				c.JSON(http.StatusOK, gin.H{"status": "ok"})
-				return
-			default:
-				c.JSON(http.StatusOK, gin.H{"status": "wait"})
-				return
-			}
-		}
-	}
 	c.JSON(http.StatusOK, gin.H{"status": "wait"})
-}
-
-func pluginLoginPollAuths(host *pluginhost.Host, resp pluginapi.AuthLoginPollResponse) []*coreauth.Auth {
-	if host == nil {
-		return nil
-	}
-	authDatas := resp.Auths
-	if len(authDatas) == 0 {
-		authDatas = []pluginapi.AuthData{resp.Auth}
-	}
-	records := make([]*coreauth.Auth, 0, len(authDatas))
-	for _, authData := range authDatas {
-		record := host.AuthDataToCoreAuth(authData, "", "")
-		if record == nil {
-			return nil
-		}
-		records = append(records, record)
-	}
-	return records
-}
-
-func (h *Handler) savePluginLoginRecords(ctx context.Context, records []*coreauth.Auth) error {
-	savedPaths := make([]string, 0, len(records))
-	for _, record := range records {
-		savedPath, errSave := h.saveTokenRecord(ctx, record)
-		if strings.TrimSpace(savedPath) != "" {
-			savedPaths = append(savedPaths, savedPath)
-		}
-		if errSave != nil {
-			h.rollbackSavedTokenRecords(ctx, savedPaths)
-			return errSave
-		}
-	}
-	return nil
-}
-
-func (h *Handler) rollbackSavedTokenRecords(ctx context.Context, savedPaths []string) {
-	for i := len(savedPaths) - 1; i >= 0; i-- {
-		path := strings.TrimSpace(savedPaths[i])
-		if path == "" {
-			continue
-		}
-		if errDelete := h.deleteTokenRecord(ctx, path); errDelete != nil {
-			log.WithError(errDelete).WithField("path", path).Warn("failed to roll back plugin auth token")
-		}
-		h.removeAuthsForPath(ctx, path, path)
-	}
 }
 
 // PopulateAuthContext extracts request info and adds it to the context

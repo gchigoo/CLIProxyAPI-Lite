@@ -377,7 +377,7 @@ func TestObserveResponseHeadersTruncatesDeterministically(t *testing.T) {
 func TestProviderSupportsQuotaObservation(t *testing.T) {
 	for _, provider := range []string{
 		"", "kimi", "xai", "grok", "antigravity", "gemini", "gemini-interactions",
-		"vertex", "aistudio", "openai", "openai-compatibility", "third-party-plugin",
+		"vertex", "aistudio", "openai", "openai-compatibility", "custom-provider",
 		"XAI", " Grok ", " Gemini ",
 	} {
 		if ProviderSupportsQuotaObservation(provider) {

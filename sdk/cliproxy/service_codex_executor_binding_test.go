@@ -4,13 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher"
-	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 )
 
 func TestEnsureExecutorsForAuth_CodexDoesNotReplaceInNormalMode(t *testing.T) {
@@ -69,7 +66,7 @@ func TestEnsureExecutorsForAuthWithMode_CodexForceReplace(t *testing.T) {
 	}
 }
 
-func TestSyncPluginModelRuntime_UnrelatedAuthDoesNotReplaceWebsocketExecutor(t *testing.T) {
+func TestSyncModelRuntime_UnrelatedAuthDoesNotReplaceWebsocketExecutor(t *testing.T) {
 	testCases := []struct {
 		name        string
 		provider    string
@@ -89,7 +86,6 @@ func TestSyncPluginModelRuntime_UnrelatedAuthDoesNotReplaceWebsocketExecutor(t *
 			service := &Service{
 				cfg:         cfg,
 				coreManager: coreauth.NewManager(nil, nil, nil),
-				pluginHost:  pluginhost.New(),
 			}
 			providerAuth := &coreauth.Auth{
 				ID:       tt.provider + "-auth",
@@ -104,8 +100,6 @@ func TestSyncPluginModelRuntime_UnrelatedAuthDoesNotReplaceWebsocketExecutor(t *
 			t.Cleanup(func() {
 				GlobalModelRegistry().UnregisterClient(providerAuth.ID)
 				GlobalModelRegistry().UnregisterClient(unrelatedAuth.ID)
-				sdkAuth.RegisterPluginAuthParser(nil)
-				sdktranslator.SetPluginHooks(nil)
 			})
 
 			if _, errRegister := service.coreManager.Register(ctx, providerAuth); errRegister != nil {
@@ -117,7 +111,7 @@ func TestSyncPluginModelRuntime_UnrelatedAuthDoesNotReplaceWebsocketExecutor(t *
 			service.ensureExecutorsForAuth(providerAuth)
 			firstExecutor, okFirst := service.coreManager.Executor(tt.provider)
 			if !okFirst || firstExecutor == nil {
-				t.Fatalf("expected %s executor before plugin model sync", tt.provider)
+				t.Fatalf("expected %s executor before model sync", tt.provider)
 			}
 
 			updatedAuth := unrelatedAuth.Clone()
@@ -130,7 +124,7 @@ func TestSyncPluginModelRuntime_UnrelatedAuthDoesNotReplaceWebsocketExecutor(t *
 
 			secondExecutor, okSecond := service.coreManager.Executor(tt.provider)
 			if !okSecond || secondExecutor == nil {
-				t.Fatalf("expected %s executor after plugin model sync", tt.provider)
+				t.Fatalf("expected %s executor after model sync", tt.provider)
 			}
 			if firstExecutor != secondExecutor {
 				t.Fatalf("expected unrelated auth sync to preserve the %s executor", tt.provider)
@@ -203,12 +197,7 @@ func TestEnsureExecutorsForAuth_XAIReplacesExecutorAfterConfigUpdate(t *testing.
 	service := &Service{
 		cfg:         &config.Config{},
 		coreManager: coreauth.NewManager(nil, nil, nil),
-		pluginHost:  pluginhost.New(),
 	}
-	t.Cleanup(func() {
-		sdkAuth.RegisterPluginAuthParser(nil)
-		sdktranslator.SetPluginHooks(nil)
-	})
 	auth := &coreauth.Auth{
 		ID:       "xai-auth-config-update",
 		Provider: "xai",

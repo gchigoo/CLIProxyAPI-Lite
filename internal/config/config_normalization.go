@@ -3,35 +3,7 @@ package config
 import (
 	"sort"
 	"strings"
-
-	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 )
-
-// NormalizePluginsConfig applies default plugin configuration values.
-func (cfg *Config) NormalizePluginsConfig() {
-	if cfg == nil {
-		return
-	}
-	cfg.Plugins.Dir = strings.TrimSpace(cfg.Plugins.Dir)
-	if cfg.Plugins.Dir == "" {
-		cfg.Plugins.Dir = defaultPluginsDir
-	}
-	if len(cfg.Plugins.StoreSources) > 0 {
-		sources := make([]string, 0, len(cfg.Plugins.StoreSources))
-		for _, source := range cfg.Plugins.StoreSources {
-			source = strings.TrimSpace(source)
-			if source == "" {
-				continue
-			}
-			sources = append(sources, source)
-		}
-		cfg.Plugins.StoreSources = sources
-	}
-	cfg.Plugins.StoreAuth = sdkpluginstore.NormalizeAuthConfigs(cfg.Plugins.StoreAuth)
-	if cfg.Plugins.Configs == nil {
-		cfg.Plugins.Configs = map[string]PluginInstanceConfig{}
-	}
-}
 
 // SanitizeCodexHeaderDefaults trims surrounding whitespace from the
 // configured Codex header fallback values.

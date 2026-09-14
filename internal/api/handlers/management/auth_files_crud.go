@@ -353,9 +353,6 @@ func (h *Handler) deleteAuthFileByName(ctx context.Context, name string) (string
 	targetPath := filepath.Join(h.cfg.AuthDir, filepath.Base(name))
 	targetID := ""
 	if targetAuth := h.findAuthForDelete(name); targetAuth != nil {
-		if !isPluginVirtualSourceDelete(name, targetAuth) {
-			return filepath.Base(name), http.StatusConflict, errPluginVirtualAuth
-		}
 		targetID = strings.TrimSpace(targetAuth.ID)
 		if path := strings.TrimSpace(authAttribute(targetAuth, "path")); path != "" {
 			targetPath = path
@@ -377,20 +374,6 @@ func (h *Handler) deleteAuthFileByName(ctx context.Context, name string) (string
 	}
 	h.removeAuthsForPath(ctx, targetPath, targetID)
 	return filepath.Base(name), http.StatusOK, nil
-}
-
-func isPluginVirtualSourceDelete(name string, auth *coreauth.Auth) bool {
-	if !coreauth.IsPluginVirtualAuth(auth) {
-		return true
-	}
-	sourcePath := strings.TrimSpace(authAttribute(auth, coreauth.AttributeVirtualSource))
-	if sourcePath == "" {
-		sourcePath = strings.TrimSpace(authAttribute(auth, "path"))
-	}
-	if sourcePath == "" {
-		return false
-	}
-	return strings.EqualFold(filepath.Base(strings.TrimSpace(name)), filepath.Base(sourcePath))
 }
 
 func (h *Handler) findAuthForDelete(name string) *coreauth.Auth {

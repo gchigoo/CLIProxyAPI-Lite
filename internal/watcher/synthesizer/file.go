@@ -1,7 +1,6 @@
 package synthesizer
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -89,62 +87,6 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	provider := strings.ToLower(strings.TrimSpace(t))
 	if provider == "gemini" {
 		provider = "gemini-cli"
-	}
-	if ctx.PluginAuthParser != nil {
-		auths, handled, errParse := parsePluginFileAuths(ctx.PluginAuthParser, pluginapi.AuthParseRequest{
-			Provider: provider,
-			Path:     fullPath,
-			FileName: filepath.Base(fullPath),
-			RawJSON:  data,
-		})
-		if errParse == nil && handled {
-			auths = compactPluginAuths(auths)
-			if len(auths) == 0 {
-				return nil, nil
-			}
-			perAccountExcluded := extractExcludedModelsFromMetadata(metadata)
-			perAccountModelAliases := extractOAuthModelAliasesFromMetadata(metadata)
-			disabled, _ := metadata["disabled"].(bool)
-			for index, auth := range auths {
-				if auth == nil {
-					continue
-				}
-				coreauth.NormalizeCredentialMetadata(auth.Metadata)
-				if len(auths) > 1 {
-					coreauth.MarkPluginVirtualAuth(auth, fullPath, index)
-				}
-				auth.CreatedAt = now
-				auth.UpdatedAt = now
-				if auth.Attributes == nil {
-					auth.Attributes = make(map[string]string)
-				}
-				auth.Attributes[coreauth.AttributePath] = fullPath
-				auth.Attributes[coreauth.AttributeSource] = fullPath
-				auth.Attributes[coreauth.AttributeSourceBackend] = coreauth.AuthSourceFile
-				if disabled {
-					auth.Disabled = true
-					auth.Status = coreauth.StatusDisabled
-					if auth.Metadata == nil {
-						auth.Metadata = make(map[string]any)
-					}
-					auth.Metadata["disabled"] = true
-				}
-				if p, ok := metadata["proxy_url"].(string); ok && auth.ProxyURL == "" {
-					auth.ProxyURL = strings.TrimSpace(p)
-				}
-				if pref, ok := metadata["prefix"].(string); ok && auth.Prefix == "" {
-					auth.Prefix = strings.Trim(strings.TrimSpace(pref), "/")
-				}
-				if errWeight := coreauth.ApplyAuthWeightMetadata(auth, metadata); errWeight != nil {
-					return nil, fmt.Errorf("invalid plugin auth weight in %s: %w", filepath.Base(fullPath), errWeight)
-				}
-				coreauth.SetOAuthModelAliasesAttribute(auth, perAccountModelAliases)
-				ApplyAuthExcludedModelsMeta(auth, cfg, perAccountExcluded, "oauth")
-				coreauth.ApplyCustomHeadersFromMetadata(auth)
-				applyFingerprintProfileAttribute(auth, metadata)
-			}
-			return auths, nil
-		}
 	}
 	if provider == "" || provider == "gemini-cli" {
 		return nil, nil
@@ -245,37 +187,6 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 		}
 	}
 	return []*coreauth.Auth{a}, nil
-}
-
-func parsePluginFileAuths(parser PluginAuthParser, req pluginapi.AuthParseRequest) ([]*coreauth.Auth, bool, error) {
-	if parser == nil {
-		return nil, false, nil
-	}
-	if multiParser, ok := parser.(PluginMultiAuthParser); ok {
-		return multiParser.ParseAuths(context.Background(), req)
-	}
-	auth, handled, errParse := parser.ParseAuth(context.Background(), req)
-	if errParse != nil || !handled || auth == nil {
-		return nil, handled, errParse
-	}
-	return []*coreauth.Auth{auth}, true, nil
-}
-
-func compactPluginAuths(auths []*coreauth.Auth) []*coreauth.Auth {
-	if len(auths) == 0 {
-		return nil
-	}
-	out := auths[:0]
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		if errWeight := coreauth.ValidateAuthWeight(auth); errWeight != nil {
-			continue
-		}
-		out = append(out, auth)
-	}
-	return out
 }
 
 // extractOAuthModelAliasesFromMetadata reads per-account model aliases from OAuth JSON metadata.

@@ -1,11 +1,41 @@
 package helps
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/tidwall/gjson"
 )
+
+func TestNormalizeClaudeToolResultsTextOnlyPreservesUserContentAndInput(t *testing.T) {
+	input := []byte(`{"messages":[{"role":"user","content":[
+        {"type":"image","source":{"type":"url","url":"https://example.com/user.png"}},
+        {"type":"tool_result","tool_use_id":"call_1","is_error":true,"content":[{"type":"text","text":"result"},{"type":"image","source":{"type":"base64","data":"AA=="}}]},
+        {"type":"tool_result","tool_use_id":"call_2","content":{"type":"image","source":{"type":"url","url":"https://example.com/tool.png"}}},
+        {"type":"tool_result","tool_use_id":"call_3","content":"already text"}
+    ]}]}`)
+	original := bytes.Clone(input)
+	got := NormalizeClaudeToolResultsTextOnly(input)
+	if !bytes.Equal(input, original) {
+		t.Fatal("normalization mutated the caller's payload")
+	}
+	if gjson.GetBytes(got, "messages.0.content.0").Raw != gjson.GetBytes(original, "messages.0.content.0").Raw {
+		t.Fatal("ordinary user image was changed")
+	}
+	if content := gjson.GetBytes(got, "messages.0.content.1.content").String(); content != "result\n\n"+openAIToolResultImageOmittedText {
+		t.Fatalf("mixed tool result = %q", content)
+	}
+	if !gjson.GetBytes(got, "messages.0.content.1.is_error").Bool() || gjson.GetBytes(got, "messages.0.content.1.tool_use_id").String() != "call_1" {
+		t.Fatal("tool result identity or status changed")
+	}
+	if content := gjson.GetBytes(got, "messages.0.content.2.content").String(); content != openAIToolResultImageOmittedText {
+		t.Fatalf("image-only tool result = %q", content)
+	}
+	if content := gjson.GetBytes(got, "messages.0.content.3.content").String(); content != "already text" {
+		t.Fatalf("string tool result = %q", content)
+	}
+}
 
 func TestNormalizeOpenAIToolResultsTextOnly(t *testing.T) {
 	input := []byte(`{"messages":[

@@ -198,78 +198,6 @@ func TestPatchAuthFileStatusRestoresModelsViaSyncHook(t *testing.T) {
 	}
 }
 
-func TestPatchPluginVirtualSourceStatusInvokesPostAuthPersistHook(t *testing.T) {
-	t.Setenv("MANAGEMENT_PASSWORD", "")
-
-	authDir := t.TempDir()
-	fileName := "source-sync.json"
-	filePath := filepath.Join(authDir, fileName)
-	if errWrite := os.WriteFile(filePath, []byte(`{"type":"gemini-cli","disabled":false}`), 0o600); errWrite != nil {
-		t.Fatalf("write source auth file: %v", errWrite)
-	}
-
-	manager := coreauth.NewManager(nil, nil, nil)
-	for _, id := range []string{"source-sync.json", "virtual-project-a", "virtual-project-b"} {
-		auth := pluginVirtualAuthForTest(authDir, fileName, id)
-		if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
-			t.Fatalf("register virtual auth %s: %v", id, errRegister)
-		}
-	}
-
-	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
-
-	var hookCalls []*coreauth.Auth
-	h.SetPostAuthPersistHook(func(_ context.Context, updated *coreauth.Auth) error {
-		if updated != nil {
-			hookCalls = append(hookCalls, updated.Clone())
-		}
-		return nil
-	})
-
-	// Disable the source file
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	req := httptest.NewRequest(http.MethodPatch, "/v0/management/auth-files/status", strings.NewReader(`{"name":"source-sync.json","disabled":true}`))
-	req.Header.Set("Content-Type", "application/json")
-	ctx.Request = req
-
-	h.PatchAuthFileStatus(ctx)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	if len(hookCalls) != 3 {
-		t.Fatalf("expected 3 hook calls for 3 virtual auths on disable, got %d", len(hookCalls))
-	}
-	for _, call := range hookCalls {
-		if !call.Disabled {
-			t.Fatalf("expected virtual auth %s to be disabled in hook call", call.ID)
-		}
-	}
-
-	// Re-enable the source file
-	hookCalls = nil
-	rec = httptest.NewRecorder()
-	ctx, _ = gin.CreateTestContext(rec)
-	req = httptest.NewRequest(http.MethodPatch, "/v0/management/auth-files/status", strings.NewReader(`{"name":"source-sync.json","disabled":false}`))
-	req.Header.Set("Content-Type", "application/json")
-	ctx.Request = req
-
-	h.PatchAuthFileStatus(ctx)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	if len(hookCalls) != 3 {
-		t.Fatalf("expected 3 hook calls for 3 virtual auths on re-enable, got %d", len(hookCalls))
-	}
-	for _, call := range hookCalls {
-		if call.Disabled {
-			t.Fatalf("expected virtual auth %s to be enabled in hook call", call.ID)
-		}
-	}
-}
-
 func TestPatchAuthFileStatusHookErrorReturns500(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 
@@ -311,41 +239,5 @@ func TestPatchAuthFileStatusHookErrorReturns500(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "simulated sync hook failure") {
 		t.Fatalf("body = %s, want simulated sync hook failure error message", rec.Body.String())
-	}
-}
-
-func TestPatchPluginVirtualSourceStatusHookErrorReturnsError(t *testing.T) {
-	t.Setenv("MANAGEMENT_PASSWORD", "")
-
-	authDir := t.TempDir()
-	fileName := "source-hook-err.json"
-	filePath := filepath.Join(authDir, fileName)
-	if errWrite := os.WriteFile(filePath, []byte(`{"type":"gemini-cli","disabled":false}`), 0o600); errWrite != nil {
-		t.Fatalf("write source auth file: %v", errWrite)
-	}
-
-	manager := coreauth.NewManager(nil, nil, nil)
-	auth := pluginVirtualAuthForTest(authDir, fileName, "source-hook-err.json")
-	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
-		t.Fatalf("register virtual auth: %v", errRegister)
-	}
-
-	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
-	h.SetPostAuthPersistHook(func(_ context.Context, _ *coreauth.Auth) error {
-		return errors.New("plugin sync failed")
-	})
-
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	req := httptest.NewRequest(http.MethodPatch, "/v0/management/auth-files/status", strings.NewReader(`{"name":"source-hook-err.json","disabled":true}`))
-	req.Header.Set("Content-Type", "application/json")
-	ctx.Request = req
-
-	h.PatchAuthFileStatus(ctx)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusInternalServerError, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "plugin sync failed") {
-		t.Fatalf("body = %s, want plugin sync failed error message", rec.Body.String())
 	}
 }

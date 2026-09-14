@@ -16,8 +16,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginstore"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -55,12 +53,7 @@ type Handler struct {
 	logDir                  string
 	postAuthHook            coreauth.PostAuthHook
 	postAuthPersistHook     coreauth.PostAuthHook
-	pluginHost              *pluginhost.Host
 	configReloadHook        func(context.Context, *config.Config)
-	pluginStoreRegistryURL  string
-	pluginStoreHTTPClient   pluginstore.HTTPDoer
-	pluginStoreRateLimiter  *pluginstore.GitHubRateLimiter
-	pluginReleases          pluginReleaseCache
 }
 
 type configReloadSnapshot struct {
@@ -141,16 +134,6 @@ func (h *Handler) SetAuthManager(manager *coreauth.Manager) {
 	h.mu.Unlock()
 }
 
-// SetPluginHost updates the plugin host used by plugin-backed management endpoints.
-func (h *Handler) SetPluginHost(host *pluginhost.Host) {
-	if h == nil {
-		return
-	}
-	h.mu.Lock()
-	h.pluginHost = host
-	h.mu.Unlock()
-}
-
 // SetConfigReloadHook updates the callback used after management saves config changes.
 func (h *Handler) SetConfigReloadHook(hook func(context.Context, *config.Config)) {
 	if h == nil {
@@ -199,12 +182,9 @@ func (h *Handler) reloadConfigAfterManagementSave(ctx context.Context, snapshot 
 		return
 	}
 	hook := h.configReloadHook
-	host := h.pluginHost
 	h.mu.Unlock()
 	if hook != nil {
 		hook(ctx, snapshot.cfg)
-	} else if host != nil {
-		host.ApplyConfig(ctx, snapshot.cfg)
 	}
 
 	h.mu.Lock()
@@ -268,7 +248,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 		c.Header("X-CPA-VERSION", buildinfo.Version)
 		c.Header("X-CPA-COMMIT", buildinfo.Commit)
 		c.Header("X-CPA-BUILD-DATE", buildinfo.BuildDate)
-		c.Header("X-CPA-SUPPORT-PLUGIN", pluginhost.SupportPluginHeaderValue())
+		c.Header("X-CPA-SUPPORT-PLUGIN", "0")
 
 		clientIP := c.ClientIP()
 		localClient := clientIP == "127.0.0.1" || clientIP == "::1"

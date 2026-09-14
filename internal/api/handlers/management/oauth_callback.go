@@ -86,7 +86,7 @@ func (h *Handler) handleOAuthCallback(c *gin.Context, req oauthCallbackRequest) 
 		return
 	}
 
-	sessionProvider, sessionStatus, isPlugin, _, completed, ok := GetOAuthSessionDetails(state)
+	sessionProvider, sessionStatus, completed, ok := GetOAuthSessionDetails(state)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": "unknown or expired state"})
 		return
@@ -99,13 +99,7 @@ func (h *Handler) handleOAuthCallback(c *gin.Context, req oauthCallbackRequest) 
 	if provider == "" {
 		provider = sessionProvider
 	}
-	var canonicalProvider string
-	var errNormalize error
-	if isPlugin {
-		canonicalProvider, errNormalize = NormalizePluginOAuthCallbackProvider(provider)
-	} else {
-		canonicalProvider, errNormalize = NormalizeOAuthCallbackProvider(provider)
-	}
+	canonicalProvider, errNormalize := NormalizeOAuthCallbackProvider(provider)
 	if errNormalize != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "unsupported provider"})
 		return

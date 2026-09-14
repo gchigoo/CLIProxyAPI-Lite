@@ -58,7 +58,7 @@ func TestOAuthSessionStoreCompleteProviderSkipsCompletedSessions(t *testing.T) {
 	}
 
 	store.completedTTL = 2 * time.Minute
-	if got := store.CompleteProvider("codex", oauthSessionSourceBuiltin); got != 1 {
+	if got := store.CompleteProvider("codex"); got != 1 {
 		t.Fatalf("CompleteProvider() = %d, want 1 newly completed session", got)
 	}
 	completedAfter, ok := store.Get("completed-state")
@@ -85,7 +85,7 @@ func TestGetOAuthSessionHidesCompletedSession(t *testing.T) {
 		t.Fatalf("GetOAuthSession() = (%q, %q, true), want completed session hidden", provider, status)
 	}
 
-	_, _, _, _, completed, detailsOK := GetOAuthSessionDetails("completed-state")
+	_, _, completed, detailsOK := GetOAuthSessionDetails("completed-state")
 	if !detailsOK || !completed {
 		t.Fatalf("GetOAuthSessionDetails() completed/ok = %t/%t, want true/true", completed, detailsOK)
 	}

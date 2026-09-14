@@ -8,7 +8,6 @@ import (
 
 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	internalutil "github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	coresession "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/session"
 )
@@ -210,57 +209,6 @@ func TestSyncMetadataSessionToContext(t *testing.T) {
 	}
 }
 
-func TestApplyRequestAfterAuthInterceptorSessionClearing(t *testing.T) {
-	req := cliproxyexecutor.Request{
-		Model:   "gpt-5.6-luna",
-		Payload: nil,
-	}
-	opts := cliproxyexecutor.Options{
-		Headers: http.Header{
-			"X-Session-ID": []string{"initial-session"},
-		},
-		Metadata: map[string]any{
-			cliproxyexecutor.CanonicalSessionIDMetadataKey: "session:initial-session",
-			cliproxyexecutor.ParentSessionIDMetadataKey:    "session:initial-parent",
-		},
-		RequestAfterAuthInterceptor: func(ctx context.Context, req cliproxyexecutor.RequestAfterAuthInterceptRequest) cliproxyexecutor.RequestAfterAuthInterceptResponse {
-			return cliproxyexecutor.RequestAfterAuthInterceptResponse{
-				ClearHeaders: []string{"X-Session-ID"},
-			}
-		},
-	}
-
-	finalReq, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai", req, opts, "gpt-5.6-luna")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(finalOpts.Headers) != 0 {
-		t.Fatalf("headers not cleared: %v", finalOpts.Headers)
-	}
-	if _, ok := finalOpts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey]; ok {
-		t.Fatalf("canonical session was not cleared from metadata after interceptor cleared headers")
-	}
-	if _, ok := finalOpts.Metadata[cliproxyexecutor.ParentSessionIDMetadataKey]; ok {
-		t.Fatalf("parent session was not cleared from metadata after interceptor cleared headers")
-	}
-
-	// Context synced from cleared metadata also has empty session
-	ctxWithSession := internallogging.WithClientRequestMetadata(context.Background(), internallogging.ClientRequestMetadata{
-		SessionID:       "session:initial-session",
-		ParentSessionID: "session:initial-parent",
-	})
-	ctxWithSession = internalutil.WithSessionID(ctxWithSession, "session:initial-session")
-	syncedCtx := syncMetadataSessionToContext(ctxWithSession, finalOpts.Metadata)
-	meta := internallogging.GetClientRequestMetadata(syncedCtx)
-	if meta.SessionID != "" || meta.ParentSessionID != "" {
-		t.Fatalf("context retained stale session after interceptor cleared headers: (%q, %q)", meta.SessionID, meta.ParentSessionID)
-	}
-	if sid := internalutil.SessionIDFromContext(syncedCtx); sid != "" {
-		t.Fatalf("context retained stale SessionIDFromContext: %q", sid)
-	}
-	_ = finalReq
-}
-
 func TestGhostParentElimination(t *testing.T) {
 	// Request has explicit root session (no parent), but options metadata carries a stale parent key
 	req := cliproxyexecutor.Request{}
@@ -279,77 +227,5 @@ func TestGhostParentElimination(t *testing.T) {
 	}
 	if canonical := enrichedOpts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey]; canonical != "header:clean-root-session" {
 		t.Fatalf("canonical session = %v, want header:clean-root-session", canonical)
-	}
-}
-
-func TestApplyRequestAfterAuthInterceptorPreservesOriginalRequestSessionOnUnrelatedHeaderChange(t *testing.T) {
-	bodyWithSession := []byte(`{"session_id":"important-session"}`)
-	req := cliproxyexecutor.Request{
-		Model:   "gpt-5.6-luna",
-		Payload: nil, // Translated or omitted payload
-	}
-	opts := cliproxyexecutor.Options{
-		OriginalRequest: bodyWithSession,
-		Headers:         make(http.Header),
-		Metadata: map[string]any{
-			cliproxyexecutor.CanonicalSessionIDMetadataKey: "session:important-session",
-		},
-		RequestAfterAuthInterceptor: func(ctx context.Context, req cliproxyexecutor.RequestAfterAuthInterceptRequest) cliproxyexecutor.RequestAfterAuthInterceptResponse {
-			return cliproxyexecutor.RequestAfterAuthInterceptResponse{
-				Headers: http.Header{
-					"X-Trace-ID": []string{"trace-abc"},
-				},
-			}
-		},
-	}
-
-	_, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai", req, opts, "gpt-5.6-luna")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	canonical, ok := finalOpts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey].(string)
-	if !ok || canonical != "session:important-session" {
-		t.Fatalf("canonical session = %q (ok=%v), want session:important-session", canonical, ok)
-	}
-}
-
-func TestApplyRequestAfterAuthInterceptorPreservesLCPHierarchyOnUnrelatedHeaderChange(t *testing.T) {
-	req := cliproxyexecutor.Request{
-		Model:   "gpt-5.6-luna",
-		Payload: []byte(`{"messages":[{"role":"user","content":"hello"}]}`),
-	}
-	opts := cliproxyexecutor.Options{
-		Headers: make(http.Header),
-		Metadata: map[string]any{
-			cliproxyexecutor.LCPAffinitySessionIDMetadataKey: "lcp:v1:child-fork-123",
-			cliproxyexecutor.ParentSessionIDMetadataKey:      "lcp:v1:parent-trunk-000",
-			cliproxyexecutor.CanonicalSessionIDMetadataKey:   "lcp:v1:child-fork-123",
-		},
-		RequestAfterAuthInterceptor: func(ctx context.Context, req cliproxyexecutor.RequestAfterAuthInterceptRequest) cliproxyexecutor.RequestAfterAuthInterceptResponse {
-			return cliproxyexecutor.RequestAfterAuthInterceptResponse{
-				Headers: http.Header{
-					"X-Trace-ID": []string{"trace-xyz"},
-				},
-			}
-		},
-	}
-
-	_, finalOpts, err := applyRequestAfterAuthInterceptor(context.Background(), nil, "openai", req, opts, "gpt-5.6-luna")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	canonical, ok := finalOpts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey].(string)
-	if !ok || canonical != "lcp:v1:child-fork-123" {
-		t.Fatalf("canonical session = %q (ok=%v), want lcp:v1:child-fork-123", canonical, ok)
-	}
-	parent, okParent := finalOpts.Metadata[cliproxyexecutor.ParentSessionIDMetadataKey].(string)
-	if !okParent || parent != "lcp:v1:parent-trunk-000" {
-		t.Fatalf("parent session = %q (ok=%v), want lcp:v1:parent-trunk-000", parent, okParent)
-	}
-
-	syncedCtx := syncMetadataSessionToContext(context.Background(), finalOpts.Metadata)
-	meta := internallogging.GetClientRequestMetadata(syncedCtx)
-	if meta.SessionID != "lcp:v1:child-fork-123" || meta.ParentSessionID != "lcp:v1:parent-trunk-000" {
-		t.Fatalf("synced context hierarchy = (%q, %q), want (lcp:v1:child-fork-123, lcp:v1:parent-trunk-000)", meta.SessionID, meta.ParentSessionID)
 	}
 }

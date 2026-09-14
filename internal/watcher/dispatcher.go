@@ -140,11 +140,10 @@ func (w *Watcher) refreshAuthState(force bool) {
 	w.activeAuthScans++
 	cfg := w.config
 	authDir := w.authDir
-	parser := w.pluginAuthParser
 	previous := maps.Clone(w.authRevisions)
 	previousFiles := maps.Clone(w.fileObservations)
 	w.clientsMutex.Unlock()
-	auths := snapshotCoreAuthsFunc(cfg, authDir, parser)
+	auths := snapshotCoreAuthsFunc(cfg, authDir)
 	w.clientsMutex.Lock()
 	w.activeAuthScans--
 	// A full scan may finish after a newer file or persisted-auth update. Keep
@@ -363,13 +362,12 @@ func normalizeAuth(a *coreauth.Auth) *coreauth.Auth {
 	return clone
 }
 
-func snapshotCoreAuths(cfg *config.Config, authDir string, parser synthesizer.PluginAuthParser) []*coreauth.Auth {
+func snapshotCoreAuths(cfg *config.Config, authDir string) []*coreauth.Auth {
 	ctx := &synthesizer.SynthesisContext{
-		Config:           cfg,
-		AuthDir:          authDir,
-		Now:              time.Now(),
-		IDGenerator:      synthesizer.NewStableIDGenerator(),
-		PluginAuthParser: parser,
+		Config:      cfg,
+		AuthDir:     authDir,
+		Now:         time.Now(),
+		IDGenerator: synthesizer.NewStableIDGenerator(),
 	}
 
 	var out []*coreauth.Auth

@@ -92,7 +92,7 @@ func (s *Service) applyConfigUpdateWithAuthSynthesis(ctx context.Context, newCfg
 }
 
 // commitConfigUpdate applies only in-memory configuration state. Runtime work that
-// may block on plugins, models, storage, or networking is deliberately deferred.
+// may block on models, storage, or networking is deliberately deferred.
 func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 	if s == nil {
 		return configCommit{}
@@ -168,10 +168,6 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	}
 
 	registrationCtx := coreauth.WithSkipPersist(ctx)
-	s.syncPluginRuntimeConfigForConfig(registrationCtx, cfg)
-	if errContext := ctx.Err(); errContext != nil {
-		return false
-	}
 	var auths []*coreauth.Auth
 	if s.coreManager != nil {
 		auths = s.coreManager.List()
@@ -198,7 +194,7 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	if errContext := ctx.Err(); errContext != nil {
 		return false
 	}
-	s.syncPluginModelRuntime(registrationCtx)
+	s.syncModelRuntime(registrationCtx)
 	return ctx.Err() == nil
 }
 
@@ -302,5 +298,4 @@ func forceHomeRuntimeConfig(cfg *config.Config) {
 	cfg.WebsocketAuth = false
 	cfg.RemoteManagement.AllowRemote = false
 	cfg.RemoteManagement.DisableControlPanel = true
-	cfg.Plugins.StoreAuth = nil
 }

@@ -12,28 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
-	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
-	"golang.org/x/net/context"
 )
-
-// PluginModelRouterHost routes matching requests to a plugin executor, the router's own executor,
-// or a built-in provider before model-to-provider resolution and auth selection.
-type PluginModelRouterHost interface {
-	RouteModel(context.Context, pluginapi.ModelRouteRequest) (pluginapi.ModelRouteResponse, bool)
-}
-
-type pluginModelRouterSkipHost interface {
-	RouteModelExcept(context.Context, pluginapi.ModelRouteRequest, string) (pluginapi.ModelRouteResponse, bool)
-}
-
-type modelRouterDetector interface {
-	HasModelRouters() bool
-}
-
-type modelRouterSkipDetector interface {
-	HasModelRoutersExcept(string) bool
-}
 
 func preferExecutionProvider(providers []string, preferred string) []string {
 	preferred = strings.ToLower(strings.TrimSpace(preferred))
@@ -101,39 +80,10 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 	return h.getRequestDetailsWithOptions(modelName, false)
 }
 
-func validateNativeInteractionsExecution(entryProtocol string, execOptions modelExecutionOptions, routeDecision modelRouteDecision) *interfaces.ErrorMessage {
-	forcedProvider := strings.ToLower(strings.TrimSpace(execOptions.ForcedProvider))
-	if forcedProvider == "" || entryProtocol != Interactions {
-		return nil
-	}
-	if routeDecision.ExecutorPluginID != "" {
-		return nativeInteractionsExecutionError()
-	}
-	if routeProvider := strings.ToLower(strings.TrimSpace(routeDecision.Provider)); routeProvider != "" && routeProvider != forcedProvider {
-		return nativeInteractionsExecutionError()
-	}
-	return nil
-}
-
-func nativeInteractionsExecutionError() *interfaces.ErrorMessage {
-	return &interfaces.ErrorMessage{
-		StatusCode: http.StatusBadRequest,
-		Error:      fmt.Errorf("agent is only supported for native interactions execution"),
-	}
-}
-
-// providersForExecution resolves the providers and normalized model for a request. When a model
-// router selected a built-in provider, it skips model->provider resolution and uses the router's
-// provider (with an optional target model); otherwise it falls back to the registry-based path.
-func (h *BaseAPIHandler) providersForExecution(modelName, originalRequestedModel string, allowImageModel bool, routeDecision modelRouteDecision, execOptions modelExecutionOptions) ([]string, string, *interfaces.ErrorMessage) {
+// providersForExecution resolves the providers and normalized model for a request.
+func (h *BaseAPIHandler) providersForExecution(modelName, originalRequestedModel string, allowImageModel bool, execOptions modelExecutionOptions) ([]string, string, *interfaces.ErrorMessage) {
 	forcedProvider := strings.ToLower(strings.TrimSpace(execOptions.ForcedProvider))
 	if forcedProvider != "" {
-		if routeDecision.ExecutorPluginID != "" {
-			return nil, "", nativeInteractionsExecutionError()
-		}
-		if routeProvider := strings.ToLower(strings.TrimSpace(routeDecision.Provider)); routeProvider != "" && routeProvider != forcedProvider {
-			return nil, "", nativeInteractionsExecutionError()
-		}
 		normalizedModel := strings.TrimSpace(modelName)
 		if normalizedModel == "" {
 			normalizedModel = strings.TrimSpace(originalRequestedModel)
@@ -142,16 +92,6 @@ func (h *BaseAPIHandler) providersForExecution(modelName, originalRequestedModel
 			return nil, "", errMsg
 		}
 		return []string{forcedProvider}, normalizedModel, nil
-	}
-	if routeDecision.Provider != "" {
-		normalizedModel := originalRequestedModel
-		if routeDecision.Model != "" {
-			normalizedModel = routeDecision.Model
-		}
-		if errMsg := h.validateImageOnlyModel(normalizedModel, allowImageModel); errMsg != nil {
-			return nil, "", errMsg
-		}
-		return []string{routeDecision.Provider}, normalizedModel, nil
 	}
 	return h.getRequestDetailsWithOptions(modelName, allowImageModel)
 }
@@ -261,94 +201,4 @@ func cloneBytes(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
-}
-
-func (h *BaseAPIHandler) modelRouterHost() PluginModelRouterHost {
-	if h == nil {
-		return nil
-	}
-	if !isNilPluginModelRouterHost(h.ModelRouterHost) {
-		return h.ModelRouterHost
-	}
-	host := h.interceptorHost()
-	if host == nil {
-		return nil
-	}
-	router, ok := host.(PluginModelRouterHost)
-	if !ok {
-		return nil
-	}
-	return router
-}
-
-type modelRouteDecision struct {
-	ExecutorPluginID string
-	Provider         string
-	Model            string
-}
-
-func routeModel(ctx context.Context, host PluginModelRouterHost, req pluginapi.ModelRouteRequest, skipPluginID string) (pluginapi.ModelRouteResponse, bool) {
-	if host == nil {
-		return pluginapi.ModelRouteResponse{}, false
-	}
-	skipPluginID = strings.TrimSpace(skipPluginID)
-	if skipPluginID != "" {
-		if skipper, ok := host.(pluginModelRouterSkipHost); ok {
-			return skipper.RouteModelExcept(ctx, req, skipPluginID)
-		}
-		return pluginapi.ModelRouteResponse{}, false
-	}
-	return host.RouteModel(ctx, req)
-}
-
-func modelRoutersEnabled(host PluginModelRouterHost, skipPluginID string) bool {
-	if host == nil {
-		return false
-	}
-	skipPluginID = strings.TrimSpace(skipPluginID)
-	if skipPluginID != "" {
-		if _, ok := host.(pluginModelRouterSkipHost); !ok {
-			return false
-		}
-		if detector, ok := host.(modelRouterSkipDetector); ok {
-			return detector.HasModelRoutersExcept(skipPluginID)
-		}
-	}
-	if detector, ok := host.(modelRouterDetector); ok {
-		return detector.HasModelRouters()
-	}
-	// No detector: treat routing as disabled (same conservative default as before any
-	// ModelRouter existed). Hosts that route must implement HasModelRouters (pluginhost.Host does).
-	return false
-}
-
-func (h *BaseAPIHandler) applyModelRouter(ctx context.Context, handlerType, modelName string, rawJSON []byte, stream bool, execOptions modelExecutionOptions) modelRouteDecision {
-	var decision modelRouteDecision
-	host := h.modelRouterHost()
-	if host == nil || !modelRoutersEnabled(host, execOptions.SkipRouterPluginID) {
-		return decision
-	}
-	meta := requestExecutionMetadata(ctx)
-	meta[coreexecutor.RequestedModelMetadataKey] = modelName
-	addModelExecutionSourceMetadata(meta, execOptions.InternalSource)
-	resp, ok := routeModel(ctx, host, pluginapi.ModelRouteRequest{
-		SourceFormat:   handlerType,
-		RequestedModel: modelName,
-		Stream:         stream,
-		Headers:        modelExecutionHeaders(ctx, execOptions.Headers),
-		Query:          modelExecutionQuery(ctx, execOptions.Query),
-		Body:           cloneBytes(rawJSON),
-		Metadata:       meta,
-	}, execOptions.SkipRouterPluginID)
-	if !ok || !resp.Handled {
-		return decision
-	}
-	switch resp.TargetKind {
-	case pluginapi.ModelRouteTargetSelf, pluginapi.ModelRouteTargetExecutor:
-		decision.ExecutorPluginID = strings.TrimSpace(resp.Target)
-	case pluginapi.ModelRouteTargetProvider:
-		decision.Provider = strings.ToLower(strings.TrimSpace(resp.Target))
-		decision.Model = strings.TrimSpace(resp.TargetModel)
-	}
-	return decision
 }

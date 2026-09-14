@@ -106,47 +106,8 @@ type Auth struct {
 }
 
 const (
-	AttributeAuthIndexSeed   = "auth_index_seed"
-	AttributePluginVirtual   = "plugin_virtual"
-	AttributeVirtualSource   = "virtual_source"
-	pluginVirtualAttrEnabled = "true"
+	AttributeAuthIndexSeed = "auth_index_seed"
 )
-
-// MarkPluginVirtualAuth marks an auth that was expanded from a plugin-owned source file.
-func MarkPluginVirtualAuth(auth *Auth, sourcePath string, ordinal int) {
-	if auth == nil {
-		return
-	}
-	if auth.Attributes == nil {
-		auth.Attributes = make(map[string]string)
-	}
-	auth.Attributes[AttributePluginVirtual] = pluginVirtualAttrEnabled
-	sourcePath = strings.TrimSpace(sourcePath)
-	if sourcePath != "" {
-		auth.Attributes[AttributeVirtualSource] = sourcePath
-	}
-	seedID := strings.TrimSpace(auth.ID)
-	if seedID == "" {
-		seedID = strings.TrimSpace(auth.FileName)
-	}
-	if seedID == "" {
-		seedID = strconv.Itoa(ordinal)
-	}
-	auth.Attributes[AttributeAuthIndexSeed] = strings.Join([]string{
-		strings.ToLower(strings.TrimSpace(auth.Provider)),
-		sourcePath,
-		seedID,
-		strconv.Itoa(ordinal),
-	}, "|")
-}
-
-// IsPluginVirtualAuth reports whether an auth was expanded from a plugin-owned source file.
-func IsPluginVirtualAuth(auth *Auth) bool {
-	if auth == nil || len(auth.Attributes) == 0 {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(auth.Attributes[AttributePluginVirtual]), pluginVirtualAttrEnabled)
-}
 
 const (
 	recentRequestBucketSeconds int64 = 10 * 60

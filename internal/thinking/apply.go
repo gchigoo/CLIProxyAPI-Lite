@@ -10,12 +10,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-type pluginProviderApplier struct {
-	owner    string
-	priority int
-	applier  ProviderApplier
-}
-
 var providerAppliersMu sync.RWMutex
 
 // nativeProviderAppliers maps built-in provider names to their implementations.
@@ -29,9 +23,6 @@ var nativeProviderAppliers = map[string]ProviderApplier{
 	"xai":         nil,
 }
 
-// pluginProviderAppliers maps plugin-owned provider names to their implementations.
-var pluginProviderAppliers = map[string]pluginProviderApplier{}
-
 // GetProviderApplier returns the ProviderApplier for the given provider name.
 // Returns nil if the provider is not registered.
 func GetProviderApplier(provider string) ProviderApplier {
@@ -41,10 +32,7 @@ func GetProviderApplier(provider string) ProviderApplier {
 	}
 	providerAppliersMu.RLock()
 	defer providerAppliersMu.RUnlock()
-	if nativeApplier, okNative := nativeProviderAppliers[provider]; okNative {
-		return nativeApplier
-	}
-	return pluginProviderAppliers[provider].applier
+	return nativeProviderAppliers[provider]
 }
 
 // RegisterProvider registers a provider applier by name.
@@ -56,52 +44,6 @@ func RegisterProvider(name string, applier ProviderApplier) {
 	providerAppliersMu.Lock()
 	defer providerAppliersMu.Unlock()
 	nativeProviderAppliers[name] = applier
-}
-
-// RegisterPluginProvider registers a plugin-owned provider applier.
-func RegisterPluginProvider(owner string, name string, priority int, applier ProviderApplier) bool {
-	owner = strings.TrimSpace(owner)
-	name = normalizedProviderName(name)
-	if owner == "" || name == "" || applier == nil {
-		return false
-	}
-	providerAppliersMu.Lock()
-	defer providerAppliersMu.Unlock()
-	if _, native := nativeProviderAppliers[name]; native {
-		return false
-	}
-	current, exists := pluginProviderAppliers[name]
-	if exists && (current.priority > priority || (current.priority == priority && current.owner <= owner)) {
-		return false
-	}
-	pluginProviderAppliers[name] = pluginProviderApplier{
-		owner:    owner,
-		priority: priority,
-		applier:  applier,
-	}
-	return true
-}
-
-// UnregisterPluginProviders removes all provider appliers owned by one plugin.
-func UnregisterPluginProviders(owner string) {
-	owner = strings.TrimSpace(owner)
-	if owner == "" {
-		return
-	}
-	providerAppliersMu.Lock()
-	defer providerAppliersMu.Unlock()
-	for provider, record := range pluginProviderAppliers {
-		if record.owner == owner {
-			delete(pluginProviderAppliers, provider)
-		}
-	}
-}
-
-// ClearPluginProviders removes all plugin-owned provider appliers.
-func ClearPluginProviders() {
-	providerAppliersMu.Lock()
-	defer providerAppliersMu.Unlock()
-	pluginProviderAppliers = map[string]pluginProviderApplier{}
 }
 
 func normalizedProviderName(provider string) string {
@@ -188,7 +130,7 @@ func ApplyThinkingWithModelInfo(body, sourceBody []byte, model string, fromForma
 
 // ApplyThinkingWithModelInfoAndSummary applies the exact configured model
 // definition with a summary intent already resolved across source translation
-// and plugin normalization.
+// and normalization.
 func ApplyThinkingWithModelInfoAndSummary(body, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, modelInfo *registry.ModelInfo, summaryConfig SummaryConfig) ([]byte, error) {
 	return applyThinking(body, sourceBody, model, fromFormat, toFormat, providerKey, modelInfo, true, summaryConfig)
 }

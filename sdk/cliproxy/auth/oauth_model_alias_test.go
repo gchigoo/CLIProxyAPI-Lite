@@ -178,7 +178,7 @@ func TestOAuthModelAliasChannel_Kimi(t *testing.T) {
 	}
 }
 
-func TestOAuthModelAliasChannel_PluginProvider(t *testing.T) {
+func TestOAuthModelAliasChannel_CustomProvider(t *testing.T) {
 	t.Parallel()
 
 	if got := OAuthModelAliasChannel(" Sample-Provider ", "oauth"); got != "sample-provider" {
@@ -298,7 +298,7 @@ func TestApplyOAuthModelAlias_PerAuthAliasSkipsAPIKey(t *testing.T) {
 	}
 }
 
-func TestApplyOAuthModelAlias_PluginProvider(t *testing.T) {
+func TestApplyOAuthModelAlias_CustomProvider(t *testing.T) {
 	t.Parallel()
 
 	aliases := map[string][]internalconfig.OAuthModelAlias{
@@ -317,7 +317,7 @@ func TestApplyOAuthModelAlias_PluginProvider(t *testing.T) {
 	}
 }
 
-func TestApplyOAuthModelAlias_PluginProviderSkipsAPIKey(t *testing.T) {
+func TestApplyOAuthModelAlias_CustomProviderSkipsAPIKey(t *testing.T) {
 	t.Parallel()
 
 	aliases := map[string][]internalconfig.OAuthModelAlias{

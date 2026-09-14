@@ -421,9 +421,6 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 			return nil
 		}
 	}
-	if IsPluginVirtualAuth(auth) {
-		return nil
-	}
 	// Skip persistence when metadata is absent (e.g., runtime-only auths).
 	if auth.Metadata == nil {
 		return nil

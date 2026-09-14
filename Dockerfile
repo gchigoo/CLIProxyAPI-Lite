@@ -1,37 +1,21 @@
 FROM golang:1.26-bookworm AS builder
 
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential git && rm -rf /var/lib/apt/lists/*
-
 COPY go.mod go.sum ./
-
 RUN go mod download
-
 COPY . .
 
-ARG VERSION=dev
+ARG VERSION=lite-dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
-RUN CGO_ENABLED=1 GOOS=linux go build -buildvcs=false -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPI ./cmd/server/
+RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -trimpath -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" -o /cli-proxy-api ./cmd/server
 
-FROM debian:bookworm
-
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir /CLIProxyAPI
-
-COPY --from=builder ./app/CLIProxyAPI /CLIProxyAPI/CLIProxyAPI
-
-COPY config.example.yaml /CLIProxyAPI/config.example.yaml
-
+FROM alpine:3.24
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /CLIProxyAPI
-
+COPY --from=builder /cli-proxy-api ./CLIProxyAPI
+COPY config.example.yaml ./config.example.yaml
 EXPOSE 8317
-
 ENV TZ=Asia/Shanghai
-
-RUN cp /usr/share/zoneinfo/${TZ} /etc/localtime && echo "${TZ}" > /etc/timezone
-
 CMD ["./CLIProxyAPI"]

@@ -11,17 +11,15 @@ import (
 
 const (
 	modelExecutionMetadataSourceKey = "source"
-	modelExecutionInternalSource    = "plugin_host_model_callback"
+	modelExecutionInternalSource    = "internal_model_execution"
 )
 
 type modelExecutionOptions struct {
-	Headers                 http.Header
-	Query                   url.Values
-	InternalSource          bool
-	SkipInterceptorPluginID string
-	SkipRouterPluginID      string
-	ForcedProvider          string
-	AuthSelectionModel      string
+	Headers            http.Header
+	Query              url.Values
+	InternalSource     bool
+	ForcedProvider     string
+	AuthSelectionModel string
 }
 
 // ProtocolExecutionRequest describes a route-level model execution request with explicit protocols.
@@ -40,16 +38,14 @@ type ProtocolExecutionRequest struct {
 
 // ModelExecutionRequest describes an internal model execution request.
 type ModelExecutionRequest struct {
-	EntryProtocol           string
-	ExitProtocol            string
-	Model                   string
-	Stream                  bool
-	Body                    []byte
-	Headers                 http.Header
-	Query                   url.Values
-	Alt                     string
-	SkipInterceptorPluginID string
-	SkipRouterPluginID      string
+	EntryProtocol string
+	ExitProtocol  string
+	Model         string
+	Stream        bool
+	Body          []byte
+	Headers       http.Header
+	Query         url.Values
+	Alt           string
 }
 
 // ModelExecutionResponse describes a non-streaming internal model execution response.
@@ -91,20 +87,14 @@ func (e *ModelExecutionStreamError) Error() string {
 }
 
 // ExecuteModel executes an internal non-streaming model request.
-// Host model callbacks are non-recursive for their caller: when
-// skip plugin IDs are set, that plugin's interceptors and router are skipped
-// for the nested model execution while other plugins may still run.
 func (h *BaseAPIHandler) ExecuteModel(ctx context.Context, req ModelExecutionRequest) (ModelExecutionResponse, *interfaces.ErrorMessage) {
-	markNestedExecution(ctx)
 	if req.Stream {
 		return ModelExecutionResponse{}, modelExecutionModeError("ExecuteModel requires Stream=false")
 	}
 	body, headers, errMsg := h.executeWithAuthManagerFormats(ctx, req.EntryProtocol, req.ExitProtocol, req.Model, cloneBytes(req.Body), req.Alt, false, modelExecutionOptions{
-		Headers:                 req.Headers,
-		Query:                   req.Query,
-		InternalSource:          true,
-		SkipInterceptorPluginID: req.SkipInterceptorPluginID,
-		SkipRouterPluginID:      req.SkipRouterPluginID,
+		Headers:        req.Headers,
+		Query:          req.Query,
+		InternalSource: true,
 	})
 	if errMsg != nil {
 		return ModelExecutionResponse{}, errMsg
@@ -117,20 +107,14 @@ func (h *BaseAPIHandler) ExecuteModel(ctx context.Context, req ModelExecutionReq
 }
 
 // ExecuteModelStream executes an internal streaming model request.
-// Host model callbacks are non-recursive for their caller: when
-// skip plugin IDs are set, that plugin's interceptors and router are skipped
-// for the nested model execution while other plugins may still run.
 func (h *BaseAPIHandler) ExecuteModelStream(ctx context.Context, req ModelExecutionRequest) (ModelExecutionStream, *interfaces.ErrorMessage) {
-	markNestedExecution(ctx)
 	if !req.Stream {
 		return ModelExecutionStream{}, modelExecutionModeError("ExecuteModelStream requires Stream=true")
 	}
 	dataChan, headers, errChan := h.executeStreamWithAuthManagerFormats(ctx, req.EntryProtocol, req.ExitProtocol, req.Model, cloneBytes(req.Body), req.Alt, false, modelExecutionOptions{
-		Headers:                 req.Headers,
-		Query:                   req.Query,
-		InternalSource:          true,
-		SkipInterceptorPluginID: req.SkipInterceptorPluginID,
-		SkipRouterPluginID:      req.SkipRouterPluginID,
+		Headers:        req.Headers,
+		Query:          req.Query,
+		InternalSource: true,
 	})
 	chunks, errMsg := prepareModelExecutionStream(ctx, dataChan, errChan)
 	if errMsg != nil {

@@ -10,7 +10,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
@@ -22,8 +21,8 @@ func pauseAuthSnapshot(t *testing.T, w *Watcher, force bool) func() {
 	scanned := make(chan struct{})
 	resume := make(chan struct{})
 	finished := make(chan struct{})
-	snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string, parser synthesizer.PluginAuthParser) []*coreauth.Auth {
-		auths := originalSnapshot(cfg, authDir, parser)
+	snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string) []*coreauth.Auth {
+		auths := originalSnapshot(cfg, authDir)
 		close(scanned)
 		<-resume
 		return auths
@@ -78,7 +77,7 @@ func TestRefreshAuthStatePreservesConcurrentFileLifecycle(t *testing.T) {
 					t.Fatal(errWrite)
 				}
 				if action == "persisted" {
-					auths := snapshotCoreAuths(w.config, dir, nil)
+					auths := snapshotCoreAuths(w.config, dir)
 					for _, auth := range auths {
 						if auth.ID == "account.json" {
 							w.dispatchPersistedAuthUpdate(AuthUpdate{Action: AuthUpdateActionModify, ID: auth.ID, Auth: auth})
@@ -129,13 +128,13 @@ func TestRefreshAuthStatePreservesConcurrentRoundTrip(t *testing.T) {
 			w.authQueue = make(chan AuthUpdate, 10)
 			originalSnapshot := snapshotCoreAuthsFunc
 			t.Cleanup(func() { snapshotCoreAuthsFunc = originalSnapshot })
-			snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string, parser synthesizer.PluginAuthParser) []*coreauth.Auth {
+			snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string) []*coreauth.Auth {
 				// Deliver two events during the scan, ending at the starting content.
 				if errWrite := os.WriteFile(path, []byte(`{"type":"codex","proxy_url":"http://intermediate.proxy:8080"}`), 0o600); errWrite != nil {
 					t.Fatal(errWrite)
 				}
 				w.addOrUpdateClient(path)
-				auths := originalSnapshot(cfg, authDir, parser)
+				auths := originalSnapshot(cfg, authDir)
 				if initiallyPresent {
 					if errWrite := os.WriteFile(path, []byte(`{"type":"codex"}`), 0o600); errWrite != nil {
 						t.Fatal(errWrite)
@@ -189,8 +188,8 @@ func TestRefreshAuthStatePreservesUnchangedFileObservation(t *testing.T) {
 			}
 			originalSnapshot := snapshotCoreAuthsFunc
 			t.Cleanup(func() { snapshotCoreAuthsFunc = originalSnapshot })
-			snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string, parser synthesizer.PluginAuthParser) []*coreauth.Auth {
-				auths := originalSnapshot(cfg, authDir, parser)
+			snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string) []*coreauth.Auth {
+				auths := originalSnapshot(cfg, authDir)
 				latest := original
 				if testCase.formatted {
 					latest = []byte(`{ "type": "codex", "proxy_url": "http://latest.proxy:8080" }`)
@@ -233,8 +232,8 @@ func TestRefreshAuthStateAppliesHashCachedFileObservation(t *testing.T) {
 			}
 			originalSnapshot := snapshotCoreAuthsFunc
 			t.Cleanup(func() { snapshotCoreAuthsFunc = originalSnapshot })
-			snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string, parser synthesizer.PluginAuthParser) []*coreauth.Auth {
-				auths := originalSnapshot(cfg, authDir, parser)
+			snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string) []*coreauth.Auth {
+				auths := originalSnapshot(cfg, authDir)
 				// reloadClients cached the new hash before publishing its matching auth.
 				if phase == "after_scan" {
 					// Suspend the event after observation, before content processing.
@@ -266,8 +265,8 @@ func TestRefreshAuthStateDoesNotResurrectUnregisteredFile(t *testing.T) {
 	w := &Watcher{authDir: dir, config: &config.Config{AuthDir: dir}, authQueue: make(chan AuthUpdate, 10)}
 	originalSnapshot := snapshotCoreAuthsFunc
 	t.Cleanup(func() { snapshotCoreAuthsFunc = originalSnapshot })
-	snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string, parser synthesizer.PluginAuthParser) []*coreauth.Auth {
-		auths := originalSnapshot(cfg, authDir, parser)
+	snapshotCoreAuthsFunc = func(cfg *config.Config, authDir string) []*coreauth.Auth {
+		auths := originalSnapshot(cfg, authDir)
 		if errRemove := os.Remove(path); errRemove != nil {
 			t.Fatal(errRemove)
 		}

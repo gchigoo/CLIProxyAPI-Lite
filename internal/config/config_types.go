@@ -1,11 +1,7 @@
 package config
 
 import (
-	"fmt"
-
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
-	"gopkg.in/yaml.v3"
 )
 
 // RequestScopedErrorRule configures custom classification and handling for upstream errors.
@@ -18,93 +14,6 @@ type RequestScopedErrorRule struct {
 	MatchRegexr []string `yaml:"match-regexr,omitempty" json:"match-regexr,omitempty"`
 	// Action specifies the handling behavior: "stop", "stop-and-cooldown", "continue", "continue-and-cooldown".
 	Action string `yaml:"action,omitempty" json:"action,omitempty"`
-}
-
-// PluginsConfig holds dynamic plugin system settings.
-type PluginsConfig struct {
-	// Enabled toggles dynamic plugin loading.
-	Enabled bool `yaml:"enabled" json:"enabled"`
-	// Dir is the plugin discovery directory.
-	Dir string `yaml:"dir" json:"dir"`
-	// StoreSources appends third-party plugin store registries to the built-in official source.
-	StoreSources []string `yaml:"store-sources,omitempty" json:"store-sources,omitempty"`
-	// StoreAuth defines optional auth rules for plugin store registry, metadata, and artifact requests.
-	StoreAuth []sdkpluginstore.AuthConfig `yaml:"store-auth,omitempty" json:"store-auth,omitempty"`
-	// AuthRevision changes when Home-managed plugin credentials change.
-	AuthRevision int64 `yaml:"auth-revision,omitempty" json:"auth-revision,omitempty"`
-	// Configs stores per-plugin instance configuration by plugin ID.
-	Configs map[string]PluginInstanceConfig `yaml:"configs" json:"configs"`
-}
-
-// PluginInstanceConfig stores host-owned plugin settings and the original plugin YAML subtree.
-type PluginInstanceConfig struct {
-	// Enabled toggles this plugin instance. Nil is normalized to false during YAML parsing.
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	// Priority controls plugin startup and routing order.
-	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
-	// Raw preserves the full original plugin configuration YAML subtree.
-	Raw yaml.Node `yaml:"-" json:"-"`
-}
-
-// UnmarshalYAML extracts host-owned fields while preserving the full original YAML node.
-func (c *PluginInstanceConfig) UnmarshalYAML(value *yaml.Node) error {
-	if c == nil {
-		return nil
-	}
-
-	c.Priority = 0
-	defaultEnabled := false
-	c.Enabled = &defaultEnabled
-
-	if value == nil || value.Kind == 0 {
-		c.Raw = *defaultPluginInstanceConfigNode()
-		return nil
-	}
-
-	c.Raw = *deepCopyNode(value)
-	if value.Kind != yaml.MappingNode {
-		return nil
-	}
-
-	for i := 0; i+1 < len(value.Content); i += 2 {
-		key := value.Content[i]
-		node := value.Content[i+1]
-		if key == nil {
-			continue
-		}
-		switch key.Value {
-		case "enabled":
-			var enabled bool
-			if errDecodeEnabled := node.Decode(&enabled); errDecodeEnabled != nil {
-				return fmt.Errorf("parse plugin enabled: %w", errDecodeEnabled)
-			}
-			c.Enabled = &enabled
-		case "priority":
-			var priority int
-			if errDecodePriority := node.Decode(&priority); errDecodePriority != nil {
-				return fmt.Errorf("parse plugin priority: %w", errDecodePriority)
-			}
-			c.Priority = priority
-		}
-	}
-
-	return nil
-}
-
-// MarshalYAML returns the preserved raw plugin YAML subtree for lossless config output.
-func (c PluginInstanceConfig) MarshalYAML() (any, error) {
-	if c.Raw.Kind == 0 {
-		return defaultPluginInstanceConfigNode(), nil
-	}
-	return deepCopyNode(&c.Raw), nil
-}
-
-func defaultPluginInstanceConfigNode() *yaml.Node {
-	return &yaml.Node{
-		Kind:    yaml.MappingNode,
-		Tag:     "!!map",
-		Content: []*yaml.Node{},
-	}
 }
 
 // ClaudeHeaderDefaults configures the measured Claude Code software baseline.
