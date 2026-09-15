@@ -53,27 +53,41 @@ func (d *homeResponsesWebsocketDispatcher) RPopAuth(context.Context, string, str
 func (*homeResponsesWebsocketDispatcher) AbortAmbiguousDispatch() {}
 
 type homeResponsesWebsocketExecutor struct {
-	calls    atomic.Int32
-	metadata []map[string]any
-	mu       sync.Mutex
+	provider  string
+	calls     atomic.Int32
+	metadata  []map[string]any
+	payloads  [][]byte
+	responses [][]byte
+	mu        sync.Mutex
 }
 
-func (*homeResponsesWebsocketExecutor) Identifier() string { return "codex" }
+func (e *homeResponsesWebsocketExecutor) Identifier() string {
+	if e != nil && strings.TrimSpace(e.provider) != "" {
+		return strings.TrimSpace(e.provider)
+	}
+	return "codex"
+}
 
 func (*homeResponsesWebsocketExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
 	return coreexecutor.Response{}, errors.New("not implemented")
 }
 
-func (e *homeResponsesWebsocketExecutor) ExecuteStream(_ context.Context, _ *coreauth.Auth, _ coreexecutor.Request, opts coreexecutor.Options) (*coreexecutor.StreamResult, error) {
-	e.calls.Add(1)
+func (e *homeResponsesWebsocketExecutor) ExecuteStream(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	call := int(e.calls.Add(1))
 	e.mu.Lock()
 	e.metadata = append(e.metadata, maps.Clone(opts.Metadata))
+	e.payloads = append(e.payloads, bytes.Clone(req.Payload))
+	payload := []byte(`{"type":"response.completed","response":{"id":"home-response","output":[]}}`)
+	if len(e.responses) >= call {
+		payload = e.responses[call-1]
+	}
 	e.mu.Unlock()
-	if lifecycle, ok := opts.ExecutionLifecycle.(interface{ Retain() }); ok {
+	lifecycle, ok := opts.ExecutionLifecycle.(interface{ Retain() })
+	if ok {
 		lifecycle.Retain()
 	}
 	chunks := make(chan coreexecutor.StreamChunk, 1)
-	chunks <- coreexecutor.StreamChunk{Payload: []byte(`{"type":"response.completed","response":{"id":"home-response","output":[]}}`)}
+	chunks <- coreexecutor.StreamChunk{Payload: payload}
 	close(chunks)
 	return &coreexecutor.StreamResult{Chunks: chunks}, nil
 }
@@ -592,6 +606,8 @@ func TestForwardResponsesWebsocketMirrorsPayloadMessageTooBig(t *testing.T) {
 type websocketCaptureExecutor struct {
 	streamCalls int
 	payloads    [][]byte
+	responses   [][]byte
+	authIDs     []string
 }
 
 type websocketProviderCaptureExecutor struct {
@@ -1107,11 +1123,18 @@ func (e *websocketCaptureExecutor) Execute(context.Context, *coreauth.Auth, core
 	return coreexecutor.Response{}, errors.New("not implemented")
 }
 
-func (e *websocketCaptureExecutor) ExecuteStream(_ context.Context, _ *coreauth.Auth, req coreexecutor.Request, _ coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+func (e *websocketCaptureExecutor) ExecuteStream(_ context.Context, auth *coreauth.Auth, req coreexecutor.Request, _ coreexecutor.Options) (*coreexecutor.StreamResult, error) {
 	e.streamCalls++
 	e.payloads = append(e.payloads, bytes.Clone(req.Payload))
+	if auth != nil {
+		e.authIDs = append(e.authIDs, auth.ID)
+	}
+	payload := []byte(`{"type":"response.completed","response":{"id":"resp-upstream","output":[{"type":"message","id":"out-1"}]}}`)
+	if len(e.responses) >= e.streamCalls {
+		payload = e.responses[e.streamCalls-1]
+	}
 	chunks := make(chan coreexecutor.StreamChunk, 1)
-	chunks <- coreexecutor.StreamChunk{Payload: []byte(`{"type":"response.completed","response":{"id":"resp-upstream","output":[{"type":"message","id":"out-1"}]}}`)}
+	chunks <- coreexecutor.StreamChunk{Payload: payload}
 	close(chunks)
 	return &coreexecutor.StreamResult{Chunks: chunks}, nil
 }
@@ -6160,5 +6183,531 @@ func TestForwardResponsesWebsocketPingWriteFailureAbortsSession(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out awaiting cancel callback on ping write failure")
+	}
+}
+
+func TestResponsesWebsocketUsesObservedCompactionResponseForReplay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tc := range []struct {
+		name       string
+		thirdModel string
+		wantIDs    []string
+	}{
+		{name: "same model", wantIDs: []string{"cmp-1", "new-user"}},
+		{name: "changed model", thirdModel: `,"model":"other-model"`, wantIDs: []string{"old-user", "old-assistant", "cmp-1", "new-user"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor := &websocketCaptureExecutor{responses: [][]byte{
+				[]byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","role":"assistant","id":"old-assistant"}]}}`),
+				[]byte(`{"type":"response.completed","response":{"id":"resp-2","output":[{"type":"compaction","id":"cmp-1","encrypted_content":"opaque"}]}}`),
+				[]byte(`{"type":"response.completed","response":{"id":"resp-3","output":[{"type":"message","role":"assistant","id":"new-assistant"}]}}`),
+			}}
+			manager := coreauth.NewManager(nil, nil, nil)
+			manager.RegisterExecutor(executor)
+			auth := &coreauth.Auth{ID: "auth-sse-" + strings.ReplaceAll(tc.name, " ", "-"), Provider: executor.Identifier(), Status: coreauth.StatusActive}
+			if _, err := manager.Register(context.Background(), auth); err != nil {
+				t.Fatalf("Register auth: %v", err)
+			}
+			registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}, {ID: "other-model"}})
+			t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
+
+			h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager))
+			router := gin.New()
+			router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+			server := httptest.NewServer(router)
+			defer server.Close()
+
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses/ws", nil)
+			if err != nil {
+				t.Fatalf("dial websocket: %v", err)
+			}
+			defer conn.Close()
+
+			requests := []string{
+				`{"type":"response.create","model":"test-model","input":[{"type":"message","role":"user","id":"old-user"}]}`,
+				`{"type":"response.create","input":[{"type":"compaction_trigger"}]}`,
+				`{"type":"response.create"` + tc.thirdModel + `,"input":[{"type":"compaction","id":"cmp-1","encrypted_content":"opaque"},{"type":"message","role":"user","id":"new-user"}]}`,
+			}
+			for index, request := range requests {
+				if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(request)); errWrite != nil {
+					t.Fatalf("write websocket message %d: %v", index+1, errWrite)
+				}
+				if _, _, errRead := conn.ReadMessage(); errRead != nil {
+					t.Fatalf("read websocket message %d: %v", index+1, errRead)
+				}
+			}
+
+			input := gjson.GetBytes(executor.payloads[2], "input").Array()
+			if len(input) != len(tc.wantIDs) {
+				t.Fatalf("unexpected post-compaction input: %s", executor.payloads[2])
+			}
+			for index, wantID := range tc.wantIDs {
+				if gotID := input[index].Get("id").String(); gotID != wantID {
+					t.Fatalf("input[%d] id = %q, want %q: %s", index, gotID, wantID, executor.payloads[2])
+				}
+			}
+			if tc.name == "same model" {
+				if gotType := input[0].Get("type").String(); gotType != "compaction" {
+					t.Fatalf("input[0] type = %q, want compaction", gotType)
+				}
+				if gotEnc := input[0].Get("encrypted_content").String(); gotEnc != "opaque" {
+					t.Fatalf("input[0] encrypted_content = %q, want opaque", gotEnc)
+				}
+				if gotType := input[1].Get("type").String(); gotType != "message" {
+					t.Fatalf("input[1] type = %q, want message", gotType)
+				}
+				if gotRole := input[1].Get("role").String(); gotRole != "user" {
+					t.Fatalf("input[1] role = %q, want user", gotRole)
+				}
+			}
+		})
+	}
+}
+
+func TestResponsesWebsocketRetainsObservedCompactionAcrossSubsequentTurns(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	executor := &websocketCaptureExecutor{responses: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","role":"assistant","id":"old-assistant"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-2","output":[{"type":"compaction","id":"cmp-1","encrypted_content":"opaque"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-3","output":[{"type":"message","role":"assistant","id":"assistant-turn-3"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-4","output":[{"type":"message","role":"assistant","id":"assistant-turn-4"}]}}`),
+	}}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{ID: "auth-multi-compact", Provider: executor.Identifier(), Status: coreauth.StatusActive}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register auth: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
+
+	h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager))
+	router := gin.New()
+	router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses/ws", nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. Initial turn
+	// 2. Compaction trigger
+	// 3. First replacement input (observed compaction output in response 2)
+	// 4. Second replacement turn carrying compaction transcript (response 3 was a normal assistant message)
+	requests := []string{
+		`{"type":"response.create","model":"test-model","input":[{"type":"message","role":"user","id":"old-user"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction_trigger"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction","id":"cmp-1","encrypted_content":"opaque"},{"type":"message","role":"user","id":"turn-3-user"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction","id":"cmp-1","encrypted_content":"opaque"},{"type":"message","role":"user","id":"turn-4-user"}]}`,
+	}
+	for index, request := range requests {
+		if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(request)); errWrite != nil {
+			t.Fatalf("write websocket message %d: %v", index+1, errWrite)
+		}
+		if _, _, errRead := conn.ReadMessage(); errRead != nil {
+			t.Fatalf("read websocket message %d: %v", index+1, errRead)
+		}
+	}
+
+	// Turn 4 must still bypass stale merge and keep exactly cmp-1 and turn-4-user,
+	// without old-user or old-assistant reappearing even after turn 3's normal assistant output.
+	inputTurn4 := gjson.GetBytes(executor.payloads[3], "input").Array()
+	wantIDsTurn4 := []string{"cmp-1", "turn-4-user"}
+	if len(inputTurn4) != len(wantIDsTurn4) {
+		t.Fatalf("turn 4 post-compaction input len = %d, want %d: %s", len(inputTurn4), len(wantIDsTurn4), executor.payloads[3])
+	}
+	for index, wantID := range wantIDsTurn4 {
+		if gotID := inputTurn4[index].Get("id").String(); gotID != wantID {
+			t.Fatalf("turn 4 input[%d] id = %q, want %q: %s", index, gotID, wantID, executor.payloads[3])
+		}
+	}
+	if gotType := inputTurn4[0].Get("type").String(); gotType != "compaction" {
+		t.Fatalf("turn 4 input[0] type = %q, want compaction", gotType)
+	}
+	if gotEnc := inputTurn4[0].Get("encrypted_content").String(); gotEnc != "opaque" {
+		t.Fatalf("turn 4 input[0] encrypted_content = %q, want opaque", gotEnc)
+	}
+	if gotType := inputTurn4[1].Get("type").String(); gotType != "message" {
+		t.Fatalf("turn 4 input[1] type = %q, want message", gotType)
+	}
+	if gotRole := inputTurn4[1].Get("role").String(); gotRole != "user" {
+		t.Fatalf("turn 4 input[1] role = %q, want user", gotRole)
+	}
+}
+
+func TestResponsesWebsocketSuccessiveCompactionsInSameSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	executor := &websocketCaptureExecutor{responses: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","role":"assistant","id":"old-assistant-1"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-2","output":[{"type":"compaction","id":"cmp-1","encrypted_content":"opaque-1"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-3","output":[{"type":"message","role":"assistant","id":"mid-assistant"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-4","output":[{"type":"compaction","id":"cmp-2","encrypted_content":"opaque-2"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-5","output":[{"type":"message","role":"assistant","id":"final-assistant"}]}}`),
+	}}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{ID: "auth-successive-compact", Provider: executor.Identifier(), Status: coreauth.StatusActive}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register auth: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
+
+	h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager))
+	router := gin.New()
+	router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses/ws", nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. Initial turn
+	// 2. First compaction trigger -> returns cmp-1
+	// 3. First replay -> returns mid-assistant
+	// 4. Second compaction trigger -> returns cmp-2
+	// 5. Second replay with cmp-2
+	requests := []string{
+		`{"type":"response.create","model":"test-model","input":[{"type":"message","role":"user","id":"turn-1-user"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction_trigger"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction","id":"cmp-1","encrypted_content":"opaque-1"},{"type":"message","role":"user","id":"turn-3-user"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction_trigger"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction","id":"cmp-2","encrypted_content":"opaque-2"},{"type":"message","role":"user","id":"turn-5-user"}]}`,
+	}
+	for index, request := range requests {
+		if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(request)); errWrite != nil {
+			t.Fatalf("write websocket message %d: %v", index+1, errWrite)
+		}
+		if _, _, errRead := conn.ReadMessage(); errRead != nil {
+			t.Fatalf("read websocket message %d: %v", index+1, errRead)
+		}
+	}
+
+	if len(executor.payloads) < 5 {
+		t.Fatalf("expected 5 payloads, got %d", len(executor.payloads))
+	}
+	fifthPayload := executor.payloads[4]
+	inputFifth := gjson.GetBytes(fifthPayload, "input").Array()
+	wantIDsFifth := []string{"cmp-2", "turn-5-user"}
+	if len(inputFifth) != len(wantIDsFifth) {
+		t.Fatalf("second replay input len = %d, want %d: %s", len(inputFifth), len(wantIDsFifth), fifthPayload)
+	}
+	for index, wantID := range wantIDsFifth {
+		if gotID := inputFifth[index].Get("id").String(); gotID != wantID {
+			t.Fatalf("second replay input[%d] id = %q, want %q: %s", index, gotID, wantID, fifthPayload)
+		}
+	}
+	if gotType := inputFifth[0].Get("type").String(); gotType != "compaction" {
+		t.Fatalf("second replay input[0] type = %q, want compaction", gotType)
+	}
+	if gotEnc := inputFifth[0].Get("encrypted_content").String(); gotEnc != "opaque-2" {
+		t.Fatalf("second replay input[0] encrypted_content = %q, want opaque-2", gotEnc)
+	}
+}
+
+type homeHTTPResponsesWebsocketDispatcher struct {
+	calls atomic.Int32
+}
+
+func (*homeHTTPResponsesWebsocketDispatcher) HeartbeatOK() bool { return true }
+
+func (d *homeHTTPResponsesWebsocketDispatcher) RPopAuth(context.Context, string, string, http.Header, int) ([]byte, error) {
+	d.calls.Add(1)
+	return json.Marshal(coreauth.Auth{
+		ID:       "home-runtime-auth",
+		Provider: "openai",
+		Status:   coreauth.StatusActive,
+		Attributes: map[string]string{
+			"websockets": "true",
+		},
+	})
+}
+
+func (*homeHTTPResponsesWebsocketDispatcher) AbortAmbiguousDispatch() {}
+
+func TestResponsesWebsocketUsesObservedCompactionResponseForHomeRuntimeAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const model = "gpt-5.4"
+	dispatcher := &homeHTTPResponsesWebsocketDispatcher{}
+	executor := &homeResponsesWebsocketExecutor{
+		provider: "openai",
+		responses: [][]byte{
+			[]byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","role":"assistant","id":"old-home-assistant"}]}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp-2","output":[{"type":"compaction","id":"cmp-home-1","encrypted_content":"opaque"}]}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp-3","output":[{"type":"message","role":"assistant","id":"new-home-assistant"}]}}`),
+		},
+	}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.SetConfig(&internalconfig.Config{Home: internalconfig.HomeConfig{Enabled: true}})
+	manager.PublishHomeDispatch(dispatcher, executionregistry.New(), 1)
+	manager.RegisterExecutor(executor)
+	// Home runtime credentials are not registered in the local client registry.
+	// The test verifies that observed compaction replay succeeds based solely on Home execution session auth.
+
+	base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager)
+	h := NewOpenAIResponsesAPIHandler(base)
+	router := gin.New()
+	router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses/ws", nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	requests := []string{
+		`{"type":"response.create","model":"` + model + `","input":[{"type":"message","role":"user","id":"old-home-user"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction_trigger"}]}`,
+		`{"type":"response.create","input":[{"type":"compaction","id":"cmp-home-1","encrypted_content":"opaque"},{"type":"message","role":"user","id":"new-home-user"}]}`,
+	}
+	for index, request := range requests {
+		if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(request)); errWrite != nil {
+			t.Fatalf("write websocket message %d: %v", index+1, errWrite)
+		}
+		if _, _, errRead := conn.ReadMessage(); errRead != nil {
+			t.Fatalf("read websocket message %d: %v", index+1, errRead)
+		}
+	}
+
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	if len(executor.payloads) < 3 {
+		t.Fatalf("expected at least 3 payloads on home executor, got %d", len(executor.payloads))
+	}
+	thirdPayload := executor.payloads[2]
+	input := gjson.GetBytes(thirdPayload, "input").Array()
+	wantIDs := []string{"cmp-home-1", "new-home-user"}
+	if len(input) != len(wantIDs) {
+		t.Fatalf("home runtime post-compaction input len = %d, want %d: %s", len(input), len(wantIDs), thirdPayload)
+	}
+	for index, wantID := range wantIDs {
+		if gotID := input[index].Get("id").String(); gotID != wantID {
+			t.Fatalf("home runtime input[%d] id = %q, want %q: %s", index, gotID, wantID, thirdPayload)
+		}
+	}
+	if gotType := input[0].Get("type").String(); gotType != "compaction" {
+		t.Fatalf("home runtime input[0] type = %q, want compaction", gotType)
+	}
+	if gotEnc := input[0].Get("encrypted_content").String(); gotEnc != "opaque" {
+		t.Fatalf("home runtime input[0] encrypted_content = %q, want opaque", gotEnc)
+	}
+	if gotType := input[1].Get("type").String(); gotType != "message" {
+		t.Fatalf("home runtime input[1] type = %q, want message", gotType)
+	}
+	if gotRole := input[1].Get("role").String(); gotRole != "user" {
+		t.Fatalf("home runtime input[1] role = %q, want user", gotRole)
+	}
+}
+
+func TestResponsesWebsocketCompactionClearedOnPrewarm(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Verify that initial generate:false prewarm initializes cleanly without leftover compaction state.
+	executor := &websocketCaptureExecutor{responses: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"compaction","id":"cmp-prewarm","encrypted_content":"opaque"}]}}`),
+	}}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{ID: "auth-prewarm-compact", Provider: executor.Identifier(), Status: coreauth.StatusActive}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register auth: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
+
+	h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager))
+	router := gin.New()
+	router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses/ws", nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. Initial prewarm request (handled locally synthetically, clears compaction)
+	prewarmReq := `{"type":"response.create","model":"test-model","generate":false,"input":[{"type":"message","role":"user","id":"user-prewarm"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(prewarmReq)); errWrite != nil {
+		t.Fatalf("write prewarm message: %v", errWrite)
+	}
+	// Read until response.completed
+	var prewarmID string
+	for {
+		_, payload, errRead := conn.ReadMessage()
+		if errRead != nil {
+			t.Fatalf("read prewarm response: %v", errRead)
+		}
+		if gjson.GetBytes(payload, "type").String() == "response.completed" {
+			prewarmID = gjson.GetBytes(payload, "response.id").String()
+			break
+		}
+	}
+	if prewarmID == "" {
+		t.Fatalf("expected non-empty prewarmID")
+	}
+
+	// 2. Followup turn
+	followupReq := `{"type":"response.create","previous_response_id":"` + prewarmID + `","input":[{"type":"message","role":"user","id":"user-followup"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(followupReq)); errWrite != nil {
+		t.Fatalf("write followup message: %v", errWrite)
+	}
+	for {
+		_, payload, errRead := conn.ReadMessage()
+		if errRead != nil {
+			t.Fatalf("read followup response: %v", errRead)
+		}
+		if gjson.GetBytes(payload, "type").String() == "response.completed" {
+			break
+		}
+	}
+
+	if len(executor.payloads) < 1 {
+		t.Fatalf("expected at least 1 upstream payload, got %d", len(executor.payloads))
+	}
+	input := gjson.GetBytes(executor.payloads[0], "input").Array()
+	wantIDs := []string{"user-prewarm", "user-followup"}
+	if len(input) != len(wantIDs) {
+		t.Fatalf("expected input len = %d, got %d: %s", len(wantIDs), len(input), executor.payloads[0])
+	}
+	for index, wantID := range wantIDs {
+		if gotID := input[index].Get("id").String(); gotID != wantID {
+			t.Fatalf("input[%d] id = %q, want %q", index, gotID, wantID)
+		}
+	}
+}
+
+func TestResponsesWebsocketCompactionClearedOnDisabledAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	executor := &websocketCaptureExecutor{responses: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"compaction","id":"cmp-disabled","encrypted_content":"opaque"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp-2","output":[{"type":"message","role":"assistant","id":"assistant-2"}]}}`),
+	}}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	auth1 := &coreauth.Auth{ID: "auth-compact-1", Provider: executor.Identifier(), Status: coreauth.StatusActive}
+	auth2 := &coreauth.Auth{ID: "auth-compact-2", Provider: executor.Identifier(), Status: coreauth.StatusActive}
+	if _, err := manager.Register(context.Background(), auth1); err != nil {
+		t.Fatalf("Register auth1: %v", err)
+	}
+	if _, err := manager.Register(context.Background(), auth2); err != nil {
+		t.Fatalf("Register auth2: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth1.ID, auth1.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	registry.GetGlobalRegistry().RegisterClient(auth2.ID, auth2.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth1.ID)
+		registry.GetGlobalRegistry().UnregisterClient(auth2.ID)
+	})
+
+	h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager))
+	router := gin.New()
+	router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses/ws", nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	req1 := `{"type":"response.create","model":"test-model","input":[{"type":"message","role":"user","id":"user-1"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(req1)); errWrite != nil {
+		t.Fatalf("write req1: %v", errWrite)
+	}
+	if _, _, errRead := conn.ReadMessage(); errRead != nil {
+		t.Fatalf("read req1: %v", errRead)
+	}
+
+	// Disable auth1 in manager
+	auth1Updated := auth1.Clone()
+	auth1Updated.Status = coreauth.StatusDisabled
+	if _, errUpdate := manager.Update(context.Background(), auth1Updated); errUpdate != nil {
+		t.Fatalf("Update auth1: %v", errUpdate)
+	}
+
+	// 2. Second turn with compaction replay
+	req2 := `{"type":"response.create","input":[{"type":"compaction","id":"cmp-disabled","encrypted_content":"opaque"},{"type":"message","role":"user","id":"user-2"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(req2)); errWrite != nil {
+		t.Fatalf("write req2: %v", errWrite)
+	}
+	if _, _, errRead := conn.ReadMessage(); errRead != nil {
+		t.Fatalf("read req2: %v", errRead)
+	}
+
+	if len(executor.payloads) < 2 {
+		t.Fatalf("expected at least 2 payloads, got %d", len(executor.payloads))
+	}
+	if len(executor.authIDs) >= 2 && executor.authIDs[1] == "auth-compact-1" {
+		t.Fatalf("disabled auth-compact-1 should not have been used for turn 2")
+	}
+}
+
+func TestResponsesWebsocketNativePassthroughClearsObservedCompaction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Verify that entering native WS passthrough clears observed compaction state.
+	executor := &websocketDirectCaptureExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	auth := &coreauth.Auth{
+		ID:         "auth-native-ws",
+		Provider:   "codex",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"websockets": "true"},
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("Register auth: %v", err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
+
+	h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager))
+	router := gin.New()
+	router.GET("/v1/responses/ws", h.ResponsesWebsocket)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/responses/ws", nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	// 1. First turn establishes native WS connection
+	req1 := `{"type":"response.create","model":"test-model","input":[{"type":"message","role":"user","content":"turn-1"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(req1)); errWrite != nil {
+		t.Fatalf("write req1: %v", errWrite)
+	}
+	if _, _, errRead := conn.ReadMessage(); errRead != nil {
+		t.Fatalf("read req1: %v", errRead)
+	}
+
+	// 2. Second turn with native passthrough
+	req2 := `{"type":"response.create","input":[{"type":"compaction_summary","summary":"comp"},{"type":"message","role":"user","content":"turn-2"}]}`
+	if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(req2)); errWrite != nil {
+		t.Fatalf("write req2: %v", errWrite)
+	}
+	if _, _, errRead := conn.ReadMessage(); errRead != nil {
+		t.Fatalf("read req2: %v", errRead)
+	}
+
+	if len(executor.payloads) < 2 {
+		t.Fatalf("expected at least 2 payloads, got %d", len(executor.payloads))
 	}
 }

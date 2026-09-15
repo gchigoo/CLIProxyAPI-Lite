@@ -25,7 +25,11 @@ type modelRegistrationTask struct {
 	phase    int
 	category string
 	run      func(*openAICompatibilityRegistrationCache)
+	done     func()
 }
+
+// modelRegistrationTaskHook lets tests pause a specific auth registration outside authUpdateMu.
+var modelRegistrationTaskHook func(authID string)
 
 func (s *Service) syncModelRuntime(ctx context.Context) {
 	if s == nil || s.coreManager == nil {
@@ -136,12 +140,17 @@ func (s *Service) runModelRegistrationTaskPhase(ctx context.Context, tasks []mod
 			go func() {
 				defer wg.Done()
 				for task := range taskCh {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-					task.run(compatCache)
+					func(task modelRegistrationTask) {
+						if task.done != nil {
+							defer task.done()
+						}
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
+						task.run(compatCache)
+					}(task)
 				}
 			}()
 		}

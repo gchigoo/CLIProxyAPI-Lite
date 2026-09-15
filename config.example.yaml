@@ -217,17 +217,18 @@ codex:
   disable-codex-cloaking: false
   # Disable Codex OAuth native session metadata synthesis while keeping header cloaking enabled.
   disable-native-identity: false
-  # Hold back the initial handshake events (response.created, response.in_progress and the
-  # websocket metadata frames) until the upstream emits its first generated event.
-  # Why: the upstream smuggles `server_is_overloaded` rejections *inside* an HTTP 200 stream,
-  # right after those handshake events, instead of returning 503 on the wire. Buffering them
-  # keeps the downstream response headers uncommitted long enough to transparently retry on
-  # another credential. Only overload/rate-limit rejections trigger failover; every other
-  # terminal failure is still delivered in-stream exactly as before.
-  # Trade-off: response headers are delayed until generation starts, which can trip client or
-  # reverse-proxy read timeouts (e.g. nginx proxy_read_timeout) on long reasoning requests.
-  # Default: false
+  # Buffer handshake, keepalive and empty item announcements before generation so early
+  # overload/rate-limit failures can retry before response headers are committed.
+  # Server-side tool events and unknown event types release the buffer immediately.
+  # Bounds: 48 upstream frames (physical SSE lines or WebSocket messages) and 1 MiB.
+  # Heartbeats are buffered too, so enabling this can delay headers past reverse-proxy timeouts.
+  # Other terminal failures stay in-stream; connection failures retain normal retry handling.
   stream-bootstrap-buffering: false
+  # Optional buffer-release duration, e.g. "20s". "0" disables the time limit.
+  # Checked only as upstream frames arrive; it never cancels or times out the request.
+  # A silent upstream is not bounded by this option. Formats that emit no handshake chunks
+  # still wait for their first translated chunk before committing downstream headers.
+  stream-bootstrap-timeout: "0"
   # When true, optimize Codex Desktop, codex-tui, and codex_cli_rs requests for multi-agent v2.
   # This refreshes Codex spawn_agent model details, removes message parameter encryption,
   # normalizes encrypted agent_message content for Codex, and converts agent_message input

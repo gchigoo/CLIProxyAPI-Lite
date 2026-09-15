@@ -329,6 +329,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 
 	var lastRequest []byte
 	lastResponseOutput := []byte("[]")
+	var observedCompaction responsesWebsocketObservedCompactionState
 	lastResponseID := ""
 	// Remains pending until a generating request commits successfully.
 	pendingPrewarmID := ""
@@ -479,14 +480,37 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			passthroughModelName = ""
 		}
 
-		allowCompactionReplayBypass := false
+		observedCompactionReplayAuthID := ""
+		observedCompactionSupported := false
+		if observedCompaction.modelName != "" &&
+			responsesWebsocketResolvedModelName(observedCompaction.modelName) == responsesWebsocketResolvedModelName(requestModelName) {
+			if observedCompaction.authID != "" {
+				if pinnedAuthID != "" {
+					if pinnedAuthID == observedCompaction.authID {
+						observedCompactionSupported = true
+						observedCompactionReplayAuthID = observedCompaction.authID
+					}
+				} else if compactionAuth, homeRuntime, ok := sessionAuthByIDWithSource(observedCompaction.authID); ok && compactionAuth != nil {
+					if homeRuntime {
+						if compactionAuth.Status == coreauth.StatusActive {
+							observedCompactionSupported = true
+							observedCompactionReplayAuthID = observedCompaction.authID
+						}
+					} else if responsesWebsocketPinnedAuthMatchesModel(compactionAuth, requestModelName, observedCompaction.modelKey, false) {
+						observedCompactionSupported = true
+						observedCompactionReplayAuthID = observedCompaction.authID
+					}
+				}
+			}
+		}
+		allowCompactionReplayBypass := observedCompactionSupported
 		if !nativeWebsocketPassthrough {
 			if pinnedAuthID != "" {
 				if pinnedAuth, ok := sessionAuthByID(pinnedAuthID); ok && pinnedAuth != nil {
-					allowCompactionReplayBypass = responsesWebsocketAuthSupportsCompactionReplay(pinnedAuth)
+					allowCompactionReplayBypass = allowCompactionReplayBypass || responsesWebsocketAuthSupportsCompactionReplay(pinnedAuth)
 				}
 			} else {
-				allowCompactionReplayBypass = h.websocketUpstreamSupportsCompactionReplayForModel(requestModelName)
+				allowCompactionReplayBypass = allowCompactionReplayBypass || h.websocketUpstreamSupportsCompactionReplayForModel(requestModelName)
 			}
 		}
 
@@ -561,6 +585,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			}
 			lastRequest = updatedLastRequest
 			lastResponseOutput = []byte("[]")
+			observedCompaction.clear()
 			lastResponseID = ""
 			lastResponsePendingToolCallIDs = nil
 			prewarmID, errWrite := writeResponsesWebsocketSyntheticPrewarm(c, writer, requestJSON, wsTimelineLog, passthroughSessionID)
@@ -612,8 +637,12 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			attemptedUpstreamMode = upstreamModeForAuth(selectedAuth)
 			preserveNativeOutput.Store(nativeRequest && strings.EqualFold(strings.TrimSpace(selectedAuth.Provider), "codex"))
 		})
-		if pinnedAuthID != "" {
-			cliCtx = handlers.WithPinnedAuthID(cliCtx, pinnedAuthID)
+		executionAuthID := pinnedAuthID
+		if executionAuthID == "" {
+			executionAuthID = observedCompactionReplayAuthID
+		}
+		if executionAuthID != "" {
+			cliCtx = handlers.WithPinnedAuthID(cliCtx, executionAuthID)
 		}
 		dataChan, _, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, requestJSON, "")
 		if !selectedAuthObserved {
@@ -684,16 +713,45 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			passthroughModelName = modelName
 			lastRequest = nil
 			lastResponseOutput = []byte("[]")
+			observedCompaction.clear()
 			lastResponseID = ""
 			lastResponsePendingToolCallIDs = nil
 		} else {
 			upstreamWebsocketAuthID = ""
 			lastRequest = nextLastRequest
 			lastResponseOutput = completedOutput
+			if inputContainsFullTranscript(gjson.ParseBytes(completedOutput)) {
+				_, modelKey := responsesWebsocketProviderSetForModel(responsesWebsocketResolvedModelName(modelName))
+				observedCompaction = responsesWebsocketObservedCompactionState{
+					modelName: modelName,
+					modelKey:  modelKey,
+					authID:    lastAttemptedAuthID,
+				}
+			} else if observedCompaction.modelName != "" {
+				targetMismatch := false
+				if responsesWebsocketResolvedModelName(observedCompaction.modelName) != responsesWebsocketResolvedModelName(modelName) {
+					targetMismatch = true
+				} else if observedCompaction.authID != "" && lastAttemptedAuthID != "" && observedCompaction.authID != lastAttemptedAuthID {
+					targetMismatch = true
+				}
+				if targetMismatch {
+					observedCompaction.clear()
+				}
+			}
 			lastResponseID = strings.TrimSpace(completedResponseID)
 			lastResponsePendingToolCallIDs = append([]string(nil), completedPendingToolCallIDs...)
 		}
 	}
+}
+
+type responsesWebsocketObservedCompactionState struct {
+	modelName string
+	modelKey  string
+	authID    string
+}
+
+func (s *responsesWebsocketObservedCompactionState) clear() {
+	*s = responsesWebsocketObservedCompactionState{}
 }
 
 func responsesWebsocketHTTPReplayRequiredError() error {

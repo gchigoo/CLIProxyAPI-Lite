@@ -184,6 +184,7 @@ func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 			continue
 		}
 
+		sanitizeCodexCatalogIdentity(&parsed)
 		return &parsed, url
 	}
 	return nil, ""
@@ -303,11 +304,34 @@ func loadModelsFromBytes(data []byte, source string) error {
 	if err := validateModelsCatalog(&parsed); err != nil {
 		return fmt.Errorf("%s: validate models catalog: %w", source, err)
 	}
+	sanitizeCodexCatalogIdentity(&parsed)
 
 	modelsCatalogStore.mu.Lock()
 	modelsCatalogStore.data = &parsed
 	modelsCatalogStore.mu.Unlock()
 	return nil
+}
+
+// Catalog metadata must not replace account-scoped Codex identity. Explicit
+// config and auth headers are applied separately and are not filtered here.
+func sanitizeCodexCatalogIdentity(data *staticModelsJSON) {
+	for _, models := range [][]*ModelInfo{data.CodexFree, data.CodexTeam, data.CodexPlus, data.CodexPro} {
+		for _, model := range models {
+			if model == nil || model.Config == nil {
+				continue
+			}
+			for key := range model.Config.OverrideHeader {
+				switch strings.ToLower(strings.TrimSpace(key)) {
+				case "user-agent", "originator", "version", "session-id", "session_id", "conversation_id",
+					"thread-id", "x-client-request-id", "x-codex-installation-id", "x-codex-window-id", "x-codex-turn-metadata":
+					delete(model.Config.OverrideHeader, key)
+				}
+			}
+			if len(model.Config.OverrideHeader) == 0 {
+				model.Config = nil
+			}
+		}
+	}
 }
 
 func getModels() *staticModelsJSON {

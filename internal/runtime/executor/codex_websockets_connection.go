@@ -274,10 +274,12 @@ func newProxyAwareWebsocketDialer(cfg *config.Config, auth *cliproxyauth.Auth) (
 		if errSOCKS5 != nil {
 			return nil, fmt.Errorf("codex websockets executor: create SOCKS5 dialer failed for proxy %s: %w", proxyutil.Redact(proxyURL), errSOCKS5)
 		}
-		dialer.Proxy = nil
-		dialer.NetDialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
-			return socksDialer.Dial(network, addr)
+		contextDialer, ok := socksDialer.(proxy.ContextDialer)
+		if !ok {
+			return nil, errors.New("codex websockets executor: SOCKS5 dialer does not support context cancellation")
 		}
+		dialer.Proxy = nil
+		dialer.NetDialContext = contextDialer.DialContext
 	case "http", "https":
 		dialer.Proxy = http.ProxyURL(setting.URL)
 	default:

@@ -10,13 +10,13 @@ This project keeps the original MIT license and upstream Git history. It is inde
 - Retains OAuth, account rotation, cooldowns, model aliases, streaming, WebSocket and image handling, management APIs, configuration reload, and built-in usage accounting.
 - Preserves account-stable native identity, provider TLS/uTLS profiles, explicit-proxy fail-closed behavior and Codex multi-agent client compatibility.
 - Removes dynamic plugin loading, plugin SDK/store/install/update, plugin routes, plugin OAuth, Home plugin synchronization and dynamic request/response/translation/scheduling hooks.
-- Does not include Devin. New upstream integrations and extension frameworks are outside the default scope.
+- Does not include Devin or LAN gateway discovery. New upstream integrations and extension frameworks are outside the default scope.
 
 Home's non-plugin functionality, native usage sinks, storage backends and the TUI remain available. The internal usage sink interface named `Plugin` does not load third-party code.
 
 ## Source and updates
 
-The initial baseline is upstream **v7.2.156**, with the existing personal customizations and **33 selected changes through v7.3.2**. This is not a complete v7.3.2 feature set. See [UPSTREAM_PATCHES.md](UPSTREAM_PATCHES.md) for included, adapted and skipped commits, and [CUSTOMIZATIONS.md](CUSTOMIZATIONS.md) for the behavior that future updates must preserve.
+The initial baseline is upstream **v7.2.156**, with the existing personal customizations and **45 selected changes through v7.3.3**. This is not a complete v7.3.3 feature set. See [UPSTREAM_PATCHES.md](UPSTREAM_PATCHES.md) for included, adapted and skipped commits, and [CUSTOMIZATIONS.md](CUSTOMIZATIONS.md) for the behavior that future updates must preserve.
 
 Upstream fixes are reviewed together with their prerequisites and tests. Changes to existing protocols, reliability, performance and security are candidates for backporting. Devin and dynamic plugin changes are excluded. Mixed changes require a focused adaptation. Do not automatically merge or rebase the personal branch onto the upstream default branch.
 
@@ -43,7 +43,9 @@ Copy `config.example.yaml` to `config.yaml`, configure the providers you use, an
 ./cli-proxy-api -config config.yaml
 ```
 
-Use `-local-model` to use the embedded model catalogs. This flag controls model catalog updates; it does not disable every background metadata check.
+Use `-local-model` to use the embedded model catalogs. This flag controls model catalog updates; it does not disable every background metadata check. Automatic Codex catalog refreshes cannot replace account identity headers; explicit config/auth overrides remain effective.
+
+Codex `stream-bootstrap-buffering` remains off by default. Its optional `stream-bootstrap-timeout` releases buffering when subsequent upstream frames arrive after the configured duration; it never aborts the upstream request and does not impose a timeout on a silent upstream.
 
 Legacy `plugins:` YAML sections are ignored and cannot enable an extension. Remove those sections from your own configuration to avoid confusion. Plugin-only management and resource routes are absent; the management capability header reports `X-CPA-SUPPORT-PLUGIN: 0`.
 
@@ -65,7 +67,7 @@ The default image is local `cliproxyapi-lite:local`; Compose does not pull an of
 CGO_ENABLED=0 go test ./...
 ```
 
-[VALIDATION.md](VALIDATION.md) records the checks and measurements for the initial personal branch. Loopback mock tests demonstrate local API routing and protocol behavior; they do not prove availability of live provider accounts or a production deployment. Performance measurements apply to the tested environment and build flags.
+[VALIDATION.md](VALIDATION.md) records the initial measurements and fresh checks for the selective v7.3.3 update. Loopback mock tests demonstrate local API routing and protocol behavior; they do not prove availability of live provider accounts or a production deployment. Performance measurements apply to the tested environment and build flags.
 
 CI runs tests and builds for Linux and Windows. It does not publish container images or deploy a service. See [MAINTENANCE.md](MAINTENANCE.md) for the update process.
 

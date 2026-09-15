@@ -1,4 +1,6 @@
-# Initial Lite validation
+# Lite validation
+
+## Initial validation (2026-09-14)
 
 Validated on 2026-09-14. The comparison baseline is the preserved personal v7.2.156 build. Lite includes 33 selected later upstream changes and dynamic plugin removal; the differences cannot all be attributed to removal alone.
 
@@ -46,3 +48,29 @@ These are single-run local observations, not production throughput or latency gu
 ## Limits
 
 No production service was replaced or restarted, no release was created, and no real provider account was used for these checks. External Home deployment, remote storage services and live provider compatibility remain unverified. Public CI performs tests and builds only.
+
+## Selective v7.3.3 update (2026-09-15)
+
+Starting Lite revision: `7466c585684fe44cf132294e434b87ff805e68ed`. Target upstream release: `v7.3.3` (`7bbfeaf8a7acf2cd5a834dcb0842539fe6aabc2b`). This update adds 12 selected changes plus the local preservation fixes described in `UPSTREAM_PATCHES.md`; it is not the complete upstream release.
+
+Fresh checks ran on macOS arm64 with Go 1.27.1. The module language version remains Go 1.26.0.
+
+| Check | Result |
+|---|---|
+| `CGO_ENABLED=0 go test -count=1 -json -p 4 ./...` | 9,050 tests/subtests passed, 0 failed, 7 skipped; 115 packages, including 29 without tests |
+| `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" ... ./cmd/server` | macOS arm64, Linux amd64 and Windows amd64 builds passed; Linux binary is statically linked |
+| Targeted `go test -race -count=1 -p 4` with `CGO_ENABLED=1` | Auth revision/registration and management status synchronization, WebSocket compaction/prewarm, catalog publication, SOCKS5 cancellation, bootstrap buffering and reasoning replay tests passed |
+| `CGO_ENABLED=1 go test -race -count=1 ./sdk/proxyutil ./cmd/fetch_antigravity_models` | Both packages passed |
+| Auth registration lock/stale-disable/same-revision cases | 100 repeated runs and 30 race-detector runs passed after making worker selection and cleanup deterministic |
+| Catalog preservation tests | Startup and periodic refresh retain metadata but strip catalog identity headers from Codex plans; other providers and explicit model overrides remain effective |
+| Transport/replay regression tests | Pre-HTTP retries do not cool credentials; certificate/proxy configuration failures remain non-transient; reasoning replay and interrupted SOCKS5 connection cleanup passed |
+| Native protocol and management integration | Local HTTP/SSE/WebSocket tests cover tool pairing, Gemini IDs, compaction continuation/reset/disabled auth, Home runtime selection and nonblocking management hooks |
+| Lite boundary tests | Removed plugin routes/configuration remain inert; source imports/directories exclude dynamic plugins and Devin while retaining native usage sinks |
+| Ledger audit | All 31 non-merge commits in the release range have full original SHAs and decisions: 5 included, 7 adapted, 19 excluded. Four merge first-parent diffs were checked separately |
+| `git diff --check` | Passed |
+
+A repeat full run exposed an upstream test assumption that the second worker to start represented a particular auth. Its failure cleanup also allowed unfinished registration to affect later model-list tests. The test hook now receives the auth ID, and cleanup waits for all started workers before resetting hooks or removing models. The repeated checks above validate that correction; the initial passing run alone was not treated as sufficient.
+
+The seven skips remain the six external signature-corpus tests and the opt-in TLS capture test. No live provider credentials were used. Linux and Windows binaries were cross-built, not executed on those operating systems in this session. Container builds, real Home/storage deployments and production performance were not revalidated. Browser tools were unavailable; management and model-state behavior was checked through local API/WebSocket integration tests instead. The initial size and latency measurements above describe the initial branch only and must not be attributed to this update.
+
+The race detector requires CGO for the test binaries; release builds still use `CGO_ENABLED=0`. No commit, push, release or deployment was performed as part of this validation.

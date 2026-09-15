@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -123,5 +125,102 @@ func TestFetchModelsFallbackAfterTwoAttempts(t *testing.T) {
 	}
 	if calls := endpoint2Calls.Load(); calls != 1 {
 		t.Fatalf("expected endpoint 2 to be called 1 time, got %d", calls)
+	}
+}
+
+func TestResolveCatalogAuthDir(t *testing.T) {
+	wd := t.TempDir()
+	local := filepath.Join(wd, "auths")
+	if err := os.Mkdir(local, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(wd, "missing")
+	if got := resolveCatalogAuthDir(wd, missing, false); got != canonical {
+		t.Fatalf("default missing directory = %q, want local fallback %q", got, canonical)
+	}
+	if got := resolveCatalogAuthDir(wd, missing, true); got != missing {
+		t.Fatalf("explicit directory was silently replaced: %q", got)
+	}
+	t.Run("symlink", func(t *testing.T) {
+		link := filepath.Join(wd, "linked-auths")
+		if err := os.Symlink(local, link); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if got := resolveCatalogAuthDir(wd, link, true); got != canonical {
+			t.Fatalf("symlink directory = %q, want %q", got, canonical)
+		}
+	})
+}
+
+func TestEnabledAntigravityAuths(t *testing.T) {
+	active := &coreauth.Auth{ID: "active.json", Provider: " Antigravity "}
+	backup := &coreauth.Auth{ID: "account.backup.json", Provider: "antigravity"}
+	disabled := &coreauth.Auth{ID: "disabled.json", Provider: "antigravity", Disabled: true}
+	other := &coreauth.Auth{ID: "codex.json", Provider: "codex"}
+	if got := enabledAntigravityAuths([]*coreauth.Auth{nil, backup, disabled, other, active}); !reflect.DeepEqual(got, []*coreauth.Auth{active}) {
+		t.Fatalf("active candidates = %#v", got)
+	}
+	if got := enabledAntigravityAuths([]*coreauth.Auth{disabled, backup, other}); !reflect.DeepEqual(got, []*coreauth.Auth{backup}) {
+		t.Fatalf("backup candidates = %#v", got)
+	}
+	if got := enabledAntigravityAuths([]*coreauth.Auth{nil, disabled, other}); len(got) != 0 {
+		t.Fatalf("unexpected eligible auths: %#v", got)
+	}
+}
+
+func TestFetchModelsWithAuthFallback(t *testing.T) {
+	var expiredCalls, validCalls, unusedCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer expired":
+			expiredCalls.Add(1)
+			http.Error(w, "expired test token", http.StatusUnauthorized)
+		case "Bearer valid":
+			validCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":{"gemini-test":{"displayName":"Test model"}}}`))
+		default:
+			unusedCalls.Add(1)
+			http.Error(w, "unexpected auth", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	var auths []*coreauth.Auth
+	for _, token := range []string{"expired", "valid", "unused"} {
+		auths = append(auths, &coreauth.Auth{ID: token, Provider: "antigravity", Metadata: map[string]any{"access_token": token}})
+	}
+	var attempts []context.Context
+	models := fetchModelsWithAuthFallback(context.Background(), auths, func(ctx context.Context, auth *coreauth.Auth) []modelEntry {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("catalog attempt lost its deadline")
+		}
+		attempts = append(attempts, ctx)
+		return fetchModelsFromBaseURLs(ctx, auth, []string{server.URL}, server.Client())
+	})
+	if len(models) != 1 || models[0].ID != "gemini-test" || expiredCalls.Load() == 0 || validCalls.Load() != 1 || unusedCalls.Load() != 0 {
+		t.Fatalf("fallback models=%v calls=%d/%d/%d", models, expiredCalls.Load(), validCalls.Load(), unusedCalls.Load())
+	}
+	for _, ctx := range attempts {
+		if ctx.Err() == nil {
+			t.Fatal("finished catalog attempt did not release its context")
+		}
+	}
+}
+
+func TestFetchModelsWithAuthFallbackStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	models := fetchModelsWithAuthFallback(ctx, []*coreauth.Auth{{ID: "first"}, {ID: "second"}}, func(context.Context, *coreauth.Auth) []modelEntry {
+		calls++
+		cancel()
+		return nil
+	})
+	if calls != 1 || len(models) != 0 {
+		t.Fatalf("canceled fallback calls=%d models=%v", calls, models)
 	}
 }

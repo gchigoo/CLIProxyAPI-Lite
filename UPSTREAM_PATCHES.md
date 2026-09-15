@@ -1,6 +1,10 @@
 # Upstream patch ledger
 
-Base: `v7.2.156` (`d1a024e9400bc65bd78ccd908945cf2eacc2835e`). Reviewed through `v7.3.2`; 102 non-merge commits, 33 included/adapted and 69 skipped/deferred. Merge commits were not imported. Reviewed does not mean all features of v7.3.2 are included.
+Base: `v7.2.156` (`d1a024e9400bc65bd78ccd908945cf2eacc2835e`). Reviewed through `v7.3.3` (`7bbfeaf8a7acf2cd5a834dcb0842539fe6aabc2b`); 133 non-merge commits, 45 included/adapted and 88 skipped/deferred. Merge commits are reviewed separately and are not imported wholesale. Reviewed does not mean all features of v7.3.3 are included.
+
+## Initial selection through v7.3.2
+
+The initial selection reviewed 102 non-merge commits: 33 included/adapted and 69 skipped/deferred.
 
 The personal branch preserves the original customizations before these backports. Codex version and WebSocket conflicts were adapted to keep account identity and TLS/proxy behavior. Dynamic plugins were then removed as a separate change.
 
@@ -108,3 +112,53 @@ The personal branch preserves the original customizations before these backports
 | [4c331bb9](https://github.com/router-for-me/CLIProxyAPI/commit/4c331bb9532f64bb56d081af1938b6f7b3b91908) | fix(devin): unwrap repeated field 28 groups, merge partial field 7 usage, and harden APICall escaping | skipped | Excluded: Devin integration is outside this fork. |
 | [5f56ce92](https://github.com/router-for-me/CLIProxyAPI/commit/5f56ce928ecdfc712dd9e308c227c3a12caeb3c5) | fix(devin): trigger dimension group fallback if any usage metric is zero | skipped | Excluded: Devin integration is outside this fork. |
 | [cca35aee](https://github.com/router-for-me/CLIProxyAPI/commit/cca35aee930299703db490a75c4cc69dbecc6f75) | fix(devin): use loopback callback endpoint for oauth redirect uri | skipped | Excluded: Devin integration is outside this fork. |
+
+## Selective update through v7.3.3 (2026-09-15)
+
+Lite starting revision: `7466c585684fe44cf132294e434b87ff805e68ed`. Upstream range: `v7.3.2` (`7fa443dc8bf8ca2f1ffd81c2472deb31b097b697`) to `v7.3.3` (`7bbfeaf8a7acf2cd5a834dcb0842539fe6aabc2b`). This range contains 31 non-merge commits and four merges: 12 changes are included/adapted and 19 are excluded. Source patches were applied without creating commits; the original SHAs below retain their provenance.
+
+The pre-existing review fixes were completed first: catalog identity filtering, context-aware SOCKS5 HTTP/WebSocket dialing, transport retries (`bef1f65c`), and reasoning replay (`7bbfeaf8`). The latter two count once in the 12 selected upstream changes. No provider credentials, deployment, dependency upgrades, or publishing changes are part of this update.
+
+| Upstream | Change | Decision | Notes |
+|---|---|---|---|
+| [cb73cd99](https://github.com/router-for-me/CLIProxyAPI/commit/cb73cd9936116848274afad42a41a4079325d383) | Buffer keepalive and empty item announcements during Codex bootstrap | adapted | Retained upstream bounded buffering and tests; preserved personal Codex configuration fields and concise, accurate guidance. Paired with 6e307553. |
+| [fe2fdde8](https://github.com/router-for-me/CLIProxyAPI/commit/fe2fdde8a8ee3576fec598b2b73496dba2c15d67) | Devin port-free manual code login | skipped | Devin is excluded. |
+| [09807c57](https://github.com/router-for-me/CLIProxyAPI/commit/09807c57ea8e0b78dc4058aa6498c535e98aa907) | Devin OAuth URL parameter order | skipped | Devin is excluded. |
+| [c35db127](https://github.com/router-for-me/CLIProxyAPI/commit/c35db127b059492fe0d20ee9beab176f94d4a147) | Mock Devin headless auth and validate prompts | skipped | Devin is excluded. |
+| [3428110d](https://github.com/router-for-me/CLIProxyAPI/commit/3428110d49be6d1141aabfc1e593b1674db1ba65) | Add LAN gateway discovery | skipped | New discovery/broadcast functionality and dependencies are outside Lite's selected scope. |
+| [c1cb0c5d](https://github.com/router-for-me/CLIProxyAPI/commit/c1cb0c5de1cf9d183568cb327f620378fec0e323) | Preserve tool argument wire characters; Devin sequential calls | adapted | Native translators and tests only; excluded Devin executor changes and used a generic model in protocol fixtures. JSON-decoded values remain equivalent; this preserves unescaped wire representation. |
+| [fd3cd151](https://github.com/router-for-me/CLIProxyAPI/commit/fd3cd1516173f7f6c178a8b22d68a055e67e2e36) | Remove FastAIToken sponsorship | skipped | Personal documentation is maintained separately. |
+| [f465ebdd](https://github.com/router-for-me/CLIProxyAPI/commit/f465ebdddef6d6335f6440a94ac42bdd6b5f026b) | Mock Devin status calls in headless auth tests | skipped | Devin is excluded. |
+| [2bcebaa8](https://github.com/router-for-me/CLIProxyAPI/commit/2bcebaa89c98871bded27cc8a8c1c4c97be25623) | Repair Claude tool pairing and standalone outputs | included | Native protocol repair with upstream regression tests. |
+| [b9005770](https://github.com/router-for-me/CLIProxyAPI/commit/b9005770e65a66786e81db48667efa4ec5b382bf) | Harden discovery lifecycle and browse limits | skipped | Depends on excluded LAN discovery. |
+| [c1b7c91f](https://github.com/router-for-me/CLIProxyAPI/commit/c1b7c91f2f8a30c8887e34e45865d129887fa6c5) | Discovery cancellation and endpoint reload | skipped | Depends on excluded LAN discovery. |
+| [f5c19d25](https://github.com/router-for-me/CLIProxyAPI/commit/f5c19d25bb4e6cf9ac309f9827fafff2029434e4) | Bound discovery browse resources | skipped | Depends on excluded LAN discovery. |
+| [f341e07b](https://github.com/router-for-me/CLIProxyAPI/commit/f341e07b949a3e1e308a4177e6c2cee47e391d16) | Antigravity catalog command symlinks and multiple-auth fallback | adapted | Preserved selection and directory behavior; extracted focused helpers, added loopback/directory tests, and stop fallback on caller cancellation. Existing catalog-fetch deadlines remain. |
+| [d48590a4](https://github.com/router-for-me/CLIProxyAPI/commit/d48590a47d785637e754ff6dbe442fac9169cb70) | Add gemini-3.5-flash-lite catalog entry | included | Metadata for the existing Antigravity provider only; no new integration or dependency. |
+| [6e307553](https://github.com/router-for-me/CLIProxyAPI/commit/6e307553f43feee00779d87669ac912fd119be0f) | Optional Codex bootstrap buffer-release duration | adapted | Kept upstream runtime behavior and tests; adapted configuration alongside personal fields. Frame-triggered release never cancels the upstream request or guarantees header delivery during silence. Default remains disabled. |
+| [c3a5e8c0](https://github.com/router-for-me/CLIProxyAPI/commit/c3a5e8c0060a031ff6a562ee637d7b8fadf27fb0) | Discovery test cleanup errors | skipped | Depends on excluded LAN discovery. |
+| [20ec9b83](https://github.com/router-for-me/CLIProxyAPI/commit/20ec9b83a1205b08a0be252cec5bef87fd534363) | Discovery lifecycle and routing gaps | skipped | Depends on excluded LAN discovery. |
+| [7d687054](https://github.com/router-for-me/CLIProxyAPI/commit/7d687054329d671b5b15aef8521be62b1bb7aa93) | Discovery JSON and interface filtering | skipped | Depends on excluded LAN discovery. |
+| [2dd2fd6d](https://github.com/router-for-me/CLIProxyAPI/commit/2dd2fd6d05ad7fb80f00290a94269b53eee01f00) | Discovery default configuration and hostnames | skipped | Depends on excluded LAN discovery. |
+| [9e847e59](https://github.com/router-for-me/CLIProxyAPI/commit/9e847e596e3beee56a967d410cf278a1b50d34c5) | Unique discovery instance names | skipped | Depends on excluded LAN discovery. |
+| [5f74accd](https://github.com/router-for-me/CLIProxyAPI/commit/5f74accd0e8328e8587fd5a736ace7eafa77c41f) | Devin manual parsing and callback errors | skipped | Devin is excluded. |
+| [13af6c00](https://github.com/router-for-me/CLIProxyAPI/commit/13af6c002bd0f754260b155d191f8adecbf3cc35) | Discovery timeout, flags and TCP types | skipped | Depends on excluded LAN discovery. |
+| [b8477c71](https://github.com/router-for-me/CLIProxyAPI/commit/b8477c7181c765da18597e6ded9e128d9aa3fe9d) | Keep native plugin call buffers alive | skipped | Dynamic plugin host is removed. |
+| [6ba44455](https://github.com/router-for-me/CLIProxyAPI/commit/6ba444557c1e91f45d5b7d954dc2cf20ed9007e8) | Plugin error HTTP status propagation | skipped | Dynamic plugin ABI is removed. |
+| [ca929459](https://github.com/router-for-me/CLIProxyAPI/commit/ca929459f98786783c847704500d976c5f3f5c06) | Responses WebSocket compaction replay and routing | adapted | Native and Home auth-bound observed compaction only; removed plugin/prepared-route fields and tests. Retained multi-turn, reset, disabled-auth and passthrough regression coverage. |
+| [748d5767](https://github.com/router-for-me/CLIProxyAPI/commit/748d5767310a2236603115345f307b9f27b366b0) | Plugin host forced provider/auth execution | skipped | Dynamic plugin host is removed. |
+| [e3cbe437](https://github.com/router-for-me/CLIProxyAPI/commit/e3cbe437d00b36fd41a00a61243fc2625ca96b57) | Avoid unrelated auth/model registration blocking | adapted | Native lock narrowing, per-auth completion and stale-generation guards; task completion lives in service_model_registration.go, without plugin paths. Added a fix/test for unconfigured duplicate batches waiting on their own registrations. Made concurrency tests target explicit auth IDs and wait for worker cleanup rather than assuming worker start order. |
+| [1fac8cc0](https://github.com/router-for-me/CLIProxyAPI/commit/1fac8cc0c8cee71733a1e04ba62863987817df89) | Remove unsupported Gemini Interactions input IDs | included | Preserve call_id pairing while dropping unsupported item/content id fields; includes translator and executor tests. |
+| [bef1f65c](https://github.com/router-for-me/CLIProxyAPI/commit/bef1f65c6c1daede091850aa96d2e1513f5e883c) | Retry pre-HTTP transport failures without credential cooldown | adapted | Retained upstream retry and Home tests; certificate and invalid-proxy errors remain non-transient even inside handshake/transport wrappers. |
+| [8c984672](https://github.com/router-for-me/CLIProxyAPI/commit/8c984672a66ab824f96aace243248ec2a67403d5) | Handle orphan outputs in OpenAI/Gemini translation | included | Native protocol repair and related Antigravity regression tests. |
+| [7bbfeaf8](https://github.com/router-for-me/CLIProxyAPI/commit/7bbfeaf8a7acf2cd5a834dcb0842539fe6aabc2b) | Promote reasoning content to summary and sanitize replay | included | Preserve summaries and valid encrypted content while clearing unsupported reasoning.content. |
+
+### Merge review
+
+Merge first-parent diffs were checked separately rather than treated as empty commits. `bb20fa2d5e8e3a6d0cb7c01af40593c7d4625135` and `6c5fef915aeaba12a2985f689fc6adef109d4125` integrate the selected bootstrap changes. `c9b3dbef2c8b99c19b58a3ac273633c2516345a0` contains excluded Devin login changes; `9b52a49927df46083247b24ea25ab7ae0bb6cf95` contains excluded discovery changes. None is merged wholesale into Lite.
+
+### Local preservation fixes
+
+- Catalog parsing strips identity headers from Codex plan metadata before startup/periodic publication. Other provider headers, non-identity metadata, and explicit config/auth/model overrides remain separate and effective.
+- SOCKS5 HTTP and WebSocket dial callbacks retain caller cancellation and close interrupted connections instead of calling context-free Dial.
+- A source dependency test guards against reintroducing dynamic plugin/Devin packages while allowing native usage sinks.

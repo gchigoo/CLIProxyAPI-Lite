@@ -8,7 +8,7 @@
 
 1. Start with a clean candidate branch or isolated worktree and record the current personal revision.
 2. Fetch upstream refs without merging. Compare the last reviewed upstream revision with the desired tag, including non-merge commits and dependencies.
-3. Classify every candidate as included, adapted, excluded or deferred. Keep original SHAs and reasons in `UPSTREAM_PATCHES.md`.
+3. Classify every candidate as included, adapted, excluded or deferred. Keep original SHAs and reasons in `UPSTREAM_PATCHES.md`. Inspect the actual diff rather than relying on `feat`/`fix` prefixes or provider names in titles. Check merge first-parent diffs for additional changes.
 4. Apply self-contained fixes with `git cherry-pick -x`. For mixed commits, preserve the source SHA and explain the retained portion. A clean textual merge is not proof of correct behavior.
 5. Keep Devin and the dynamic plugin framework absent. Preserve `CUSTOMIZATIONS.md`, native fallback behavior, and the original regression tests. Do not add switches or stubs for removed integrations.
 6. Run focused tests followed by the required build and suite gates. Recheck applicable native identity, routing, proxy, authentication and streaming behavior. Use local mock requests for reproducible smoke tests.

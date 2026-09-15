@@ -51,7 +51,12 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 	}
 
 	h.authStatusMu.Lock()
-	defer h.authStatusMu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			h.authStatusMu.Unlock()
+		}
+	}()
 
 	ctx := c.Request.Context()
 
@@ -98,11 +103,13 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", err)})
 		return
 	}
+	hookAuth := updatedAuth
+	if hookAuth == nil {
+		hookAuth = targetAuth
+	}
+	locked = false
+	h.authStatusMu.Unlock()
 	if h.postAuthPersistHook != nil {
-		hookAuth := updatedAuth
-		if hookAuth == nil {
-			hookAuth = targetAuth
-		}
 		if errHook := h.postAuthPersistHook(ctx, hookAuth); errHook != nil {
 			log.Errorf("post-auth persist hook failed for status update on %s: %v", targetAuth.ID, errHook)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to synchronize auth runtime: %v", errHook)})

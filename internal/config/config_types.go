@@ -1,6 +1,11 @@
 package config
 
 import (
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 )
 
@@ -77,14 +82,13 @@ type CodexConfig struct {
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
 	// DisableNativeIdentity disables Codex OAuth session metadata synthesis while keeping header cloaking available.
 	DisableNativeIdentity bool `yaml:"disable-native-identity" json:"disable-native-identity"`
-	// StreamBootstrapBuffering holds back initial handshake events (response.created,
-	// response.in_progress and the websocket metadata frames) until the first generated event
-	// arrives. The upstream delivers server_is_overloaded rejections inside an HTTP 200 stream
-	// right after those handshake events instead of returning 503 on the wire, so buffering them
-	// keeps the downstream response headers uncommitted long enough to retry on another credential.
-	// Trade-off: the response headers are delayed until the upstream starts generating, which can
-	// trip client or reverse-proxy read timeouts. Default is false.
+	// StreamBootstrapBuffering holds handshake, keepalive and empty item announcements
+	// before generation, allowing early overload failover. The buffer is bounded by
+	// 48 frames and 1 MiB; server-side tool events release it immediately. Default is false.
 	StreamBootstrapBuffering bool `yaml:"stream-bootstrap-buffering" json:"stream-bootstrap-buffering"`
+	// StreamBootstrapTimeout releases buffering when a later frame arrives after this
+	// duration. It never aborts the upstream request. Zero disables the time limit.
+	StreamBootstrapTimeout string `yaml:"stream-bootstrap-timeout,omitempty" json:"stream-bootstrap-timeout,omitempty"`
 	// OptimizeMultiAgentV2 optimizes official Codex multi-agent requests.
 	OptimizeMultiAgentV2 bool `yaml:"optimize-multi-agent-v2" json:"optimize-multi-agent-v2"`
 	// OrphanDelegationCompatibility enables opt-in compatibility for orphan Codex delegation outputs.
@@ -94,6 +98,32 @@ type CodexConfig struct {
 	ModelLevelCooling bool `yaml:"model-level-cooling" json:"model-level-cooling"`
 	// LiveMediaRelay terminates and relays Codex Live WebRTC media in this process.
 	LiveMediaRelay CodexLiveMediaRelayConfig `yaml:"live-media-relay" json:"live-media-relay"`
+}
+
+// DefaultCodexStreamBootstrapTimeout leaves bootstrap buffering without a time limit.
+const DefaultCodexStreamBootstrapTimeout = 0
+
+const maxBootstrapTimeoutSeconds = int64(math.MaxInt64 / time.Second)
+
+// StreamBootstrapTimeoutDuration accepts durations or seconds; invalid and disabled values return zero.
+func (c *CodexConfig) StreamBootstrapTimeoutDuration() time.Duration {
+	if c == nil {
+		return DefaultCodexStreamBootstrapTimeout
+	}
+	raw := strings.TrimSpace(c.StreamBootstrapTimeout)
+	if raw == "" || raw == "0" || strings.EqualFold(raw, "none") || strings.EqualFold(raw, "unlimited") || strings.EqualFold(raw, "disabled") || strings.EqualFold(raw, "off") || strings.EqualFold(raw, "never") {
+		return 0
+	}
+	if d, err := time.ParseDuration(raw); err == nil && d >= 0 {
+		return d
+	}
+	if secs, err := strconv.Atoi(raw); err == nil && secs >= 0 && int64(secs) <= maxBootstrapTimeoutSeconds {
+		d := time.Duration(secs) * time.Second
+		if d >= 0 {
+			return d
+		}
+	}
+	return DefaultCodexStreamBootstrapTimeout
 }
 
 // CodexLiveMediaRelayConfig configures the in-process Codex Live WebRTC gateway.
