@@ -96,6 +96,7 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 		if len(eventData) == 0 {
 			continue
 		}
+		reporter.ObserveResponseModel(eventData)
 		eventType := gjson.GetBytes(eventData, "type").String()
 		switch eventType {
 		case "response.output_item.done":
@@ -203,6 +204,7 @@ func (e *XAIExecutor) executeCompactRequest(ctx context.Context, auth *cliproxya
 		return nil, nil, nil, err
 	}
 
+	reporter.ObserveResponseModel(data)
 	reporter.Publish(ctx, helps.ParseOpenAIUsage(data))
 	reporter.EnsurePublished(ctx)
 	clearXAIReasoningReplayAfterCompaction(ctx, prepared.replayScope)
