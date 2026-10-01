@@ -369,3 +369,11 @@ Triaged 59 non-merge commits in v7.3.14..v8.0.3: 11 included/adapted; remaining 
 | 0a45f253344089c2f47ae698c34abe8837ec6135 | fix(translator): append trailing newlines to SSEEventData frames | adapted | Complete SSE framing; retain regression tests and adapt Lite SSE readers; absent upstream digest fixture omitted. |
 | 04f88169ada8433b5183282134685d91a4b7a3ef | fix(gemini): preserve thought signatures in interactions translation | deferred | Coupled provider identity/tool-pairing/signature bundle has earlier deferred prerequisites; preserve existing behavior pending complete adaptation. |
 | acdace936fa7df2905500c7f5e0a97d683138dea | fix(discovery): support bonded interfaces and deduplicate build warnings | excluded | Removed plugins/Devin, deferred discovery or unadopted Meta provider. Mixed native portions are deferred pending separate prerequisite adaptation. |
+
+## xAI chat-proxy client version hotfix (2026-10-01)
+
+Baseline: the recorded 2026-09-28 selective build (08ad18d1). xAI raised the minimum accepted `x-grok-client-version` on cli-chat-proxy.grok.com to 1.0.13, so every xAI OAuth chat request failed with HTTP 426 while `/v1/models` stayed healthy. Only this fix is taken now; the other v8.0.3..v8.0.8 commits are not yet triaged and are not claimed as reviewed.
+
+| Upstream SHA | Change | Decision | Rationale |
+|---|---|---|---|
+| b467a83c0fe5bf6adb1ff158db0d9f8997802427 | fix(xai): bump pinned grok client version to 1.0.44 for chat-proxy | adapted | Constant change unchanged. The regression test import path is adapted from the v8 module to v7. The per-auth `header:x-grok-client-version` override still takes precedence over the pin. |

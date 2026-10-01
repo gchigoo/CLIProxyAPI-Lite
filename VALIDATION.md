@@ -102,3 +102,14 @@ Executed on Windows amd64 with Go 1.26.1 and CGO_ENABLED=0:
 The upstream namespace regression test was adapted to Lite's existing helper name. A trial to apply invalid_grant backoff to HTTP 401 was rejected by existing terminal-auth tests and withdrawn; existing HTTP 401 termination semantics remain unchanged. Enabled HTTP 400/statusless invalid_grant backoff and disabled-account unscheduling follow the selected upstream change.
 
 Linux tests were not executed locally; the Linux binary is cross-built. External signature corpora and opt-in TLS capture infrastructure were not supplied. Unit tests and cross-builds do not establish production/provider health. Independent review and any production deployment evidence are recorded separately outside this public repository; this section records local validation only.
+
+## xAI client version hotfix (2026-10-01)
+
+Executed on macOS arm64 with Go 1.26.1 and CGO_ENABLED=0:
+
+- Before the change, the 08ad18d1 tree rebuilt for linux/amd64 with the recorded ldflags reproduced the deployed binary byte for byte.
+- `TestXAIChatProxyClientVersionMeetsServerFloor` failed against 0.2.120 and passed against 1.0.44. The header-derivation and per-auth override tests passed before and after.
+- `go test ./internal/runtime/executor/` and `go test -p 4 ./...` passed (86 packages with tests, 29 without).
+- The Linux amd64 cross-build passed and carries `xai-grok-workspace/1.0.44`.
+
+Linux tests were not executed locally. Unit tests do not establish live xAI availability; production probe evidence is recorded outside this public repository.
