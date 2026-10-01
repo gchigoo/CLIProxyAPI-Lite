@@ -93,6 +93,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	upstreamBody, nativeIdentityState = applyCodexNativeIdentityBody(ctx, e.cfg, from, httpURL, auth, req, nativeCacheID, upstreamBody, opts.Headers)
 	reporter.SetTranslatedReasoningEffort(clientBody, to.String())
 	wsHeaders = applyCodexWebsocketHeaders(ctx, wsHeaders, auth, apiKey, e.cfg, nativeRequest, opts.Headers)
+	applyCodexRoutingHint(ctx, wsHeaders, auth, baseModel, upstreamBody, opts.Headers)
 	applyModelHeaderOverrides(wsHeaders, baseModel)
 	applyCodexIdentityConfuseHeaders(wsHeaders, &identityState)
 	applyCodexNativeIdentityWebsocketHeaders(wsHeaders, &nativeIdentityState)

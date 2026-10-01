@@ -24,7 +24,7 @@ const (
 )
 
 func TestCodexNativeIdentityAstraUsesCurrentClientVersion(t *testing.T) {
-	const expectedVersion = "0.154.0"
+	const expectedVersion = "0.155.0"
 	if codexCLIVersion != expectedVersion || codexNativeVersion != expectedVersion {
 		t.Fatalf("identity versions = %q/%q, want %q", codexCLIVersion, codexNativeVersion, expectedVersion)
 	}
@@ -34,7 +34,7 @@ func TestCodexNativeIdentityAstraUsesCurrentClientVersion(t *testing.T) {
 	req.Model = "gpt-6-astra"
 	req.Payload = []byte(`{"model":"gpt-6-astra","stream":true,"input":[{"role":"user","content":"hello"}]}`)
 	ctx := contextWithCodexDownstreamHeaders(map[string]string{
-		"User-Agent": "codex_exec/0.154.0",
+		"User-Agent": "codex_exec/0.155.0",
 		"Version":    "0.149.0",
 	})
 	httpReq, body, _, state, err := executor.cacheHelper(ctx, sdktranslator.FormatOpenAIResponse, codexNativeResponsesURL, auth, req, req.Payload, req.Payload)

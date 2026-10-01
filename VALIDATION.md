@@ -1,5 +1,17 @@
 # Lite validation
 
+## GPT-6 Sol / Grok 4.7 update (2026-09-23)
+
+Production source baseline: `d5310b33fe83b75c2a574f2884d8bdf88a012fdf`.
+Selected compatibility changes are recorded in `UPSTREAM_PATCHES.md`; this is not a full upstream v7.3.14 merge.
+
+- Windows amd64 / Go 1.26.1 / `CGO_ENABLED=0`: complete `go test -p 4 ./...` passed after backporting the upstream bootstrap test cleanup and mock-clock synchronization fix.
+- The initial runs exposed pre-existing test-only stream draining and mock-clock races. Those failed runs are not treated as passing evidence.
+- New model registration/identity tests and focused native-identity/SOCKS5 cancellation tests passed.
+- Linux amd64 production binary cross-build passed. Binary SHA-256: `cf95f421f528b4afc9b141c6298aafc065b409cc0970cc401c1de9451fba6d75`.
+- `git diff --check` passed. Main-agent review covered changed production code and preserved account identity, cancellation, proxy, and removed-provider boundaries.
+- Live deployment evidence is maintained outside the public repository. Model catalog presence does not establish upstream account entitlement.
+
 ## Initial validation (2026-09-14)
 
 Validated on 2026-09-14. The comparison baseline is the preserved personal v7.2.156 build. Lite includes 33 selected later upstream changes and dynamic plugin removal; the differences cannot all be attributed to removal alone.
@@ -74,3 +86,19 @@ A repeat full run exposed an upstream test assumption that the second worker to 
 The seven skips remain the six external signature-corpus tests and the opt-in TLS capture test. No live provider credentials were used. Linux and Windows binaries were cross-built, not executed on those operating systems in this session. Container builds, real Home/storage deployments and production performance were not revalidated. Browser tools were unavailable; management and model-state behavior was checked through local API/WebSocket integration tests instead. The initial size and latency measurements above describe the initial branch only and must not be attributed to this update.
 
 The race detector requires CGO for the test binaries; release builds still use `CGO_ENABLED=0`. No commit, push, release or deployment was performed as part of this validation.
+
+## Selective reliability update (2026-09-28)
+
+The GitHub maintenance baseline is d5310b33fe83b75c2a574f2884d8bdf88a012fdf. The deployed selective v7.3.14 source was first verified against its 19-file SHA-256 manifest and retained. Eleven subsequent upstream changes were included/adapted through the v8.0.3 review boundary; the result retains the v7 configuration/API and module contract.
+
+Executed on Windows amd64 with Go 1.26.1 and CGO_ENABLED=0:
+
+- Affected logging, session, auth, executor/helpers, multi-agent and translator package tests passed.
+- Final go test -p 4 ./... passed. Go reused successful unchanged package results from the preceding runs.
+- Required stripped Windows integration build and Linux amd64 cross-build passed. Git safe.directory was scoped to the build process because the sandbox and interactive users have different repository ownership.
+- gofmt reported no outstanding changes; git diff --check passed.
+- Native identity, account header precedence, TLS/proxy, model registration, usage/Redis and removed integration regression tests remain part of the passing suite.
+
+The upstream namespace regression test was adapted to Lite's existing helper name. A trial to apply invalid_grant backoff to HTTP 401 was rejected by existing terminal-auth tests and withdrawn; existing HTTP 401 termination semantics remain unchanged. Enabled HTTP 400/statusless invalid_grant backoff and disabled-account unscheduling follow the selected upstream change.
+
+Linux tests were not executed locally; the Linux binary is cross-built. External signature corpora and opt-in TLS capture infrastructure were not supplied. Unit tests and cross-builds do not establish production/provider health. Independent review and any production deployment evidence are recorded separately outside this public repository; this section records local validation only.
