@@ -377,3 +377,47 @@ Baseline: the recorded 2026-09-28 selective build (08ad18d1). xAI raised the min
 | Upstream SHA | Change | Decision | Rationale |
 |---|---|---|---|
 | b467a83c0fe5bf6adb1ff158db0d9f8997802427 | fix(xai): bump pinned grok client version to 1.0.44 for chat-proxy | adapted | Constant change unchanged. The regression test import path is adapted from the v8 module to v7. The per-auth `header:x-grok-client-version` override still takes precedence over the pin. |
+
+## Selective update through v8.0.8 (2026-10-02)
+
+Baseline: e5660f35 (the recorded 2026-09-28 build plus the xAI hotfix). Triaged all 38 non-merge commits in v8.0.3..v8.0.8: b467a83c was taken in the hotfix above, 9 of the remaining 37 are included/adapted, and the rest are deferred or excluded. No merge commit is imported and the v7 configuration/API/module contract is unchanged. Provider relevance was judged against the deployed configuration and recent request mix (Codex, xAI and Antigravity accounts; Responses and Chat Completions clients; no Claude, Kimi, Home or codex-api-key routes).
+
+| Upstream SHA | Change | Decision | Rationale |
+|---|---|---|---|
+| 48686ccc8fbe898c2d048ac4815a7b2f1e409e27 | feat(config): preserve unknown nested fields as comments during v8 migration | deferred | v8 configuration migration; Lite keeps the v7 configuration contract. |
+| b87ac8371c576ecd01fb73c2415f3035aca55f98 | feat(readme): add OpenLux sponsorship information and logo | excluded | Upstream sponsorship documentation. |
+| 5d8bb3d9b77497f17af738e753471f91d31b5bd3 | fix(codex): normalize empty function call arguments in responses requests | included | Blank `function_call.arguments` become `{}` for Responses-to-Codex requests. |
+| 958eeca719c84338fa6ddbd83f52dbb7335d95de | fix(claude): remap MCP aliases in tool_addition/tool_removal blocks | deferred | Claude OAuth executor MCP alias remapping; production has no Claude accounts. |
+| 59baf7314af5255b6519689b3a0c51993274f731 | feat(codex): extract and persist subscription plan type | deferred | Feature: persisted Codex subscription plan type. |
+| b9971ee3dfcc3f589209a1e35c0dca72fa9bea36 | feat(sdk): add Home credential capabilities and quota APIs | deferred | Home credential capabilities and quota APIs; Home is not configured. |
+| d3cd466ddbbd1d44a07653ff52dcd7e766680e69 | fix(codex): use resolved compat for multi-agent v2 | deferred | Switches multi-agent optimization to resolved codex-api-key compatibility, which is not configured; Lite keeps the model-based call. |
+| ac42accc885dddcefe19f5729191791a6d239e60 | fix(openai): use routed home model compatibility options | deferred | Home-routed OpenAI-compatible model options; Home is not configured. |
+| d33f63f8e3d98428440ebca5a5b6a981a61ff71e | feat(logging): switch request ID generation to UUIDv7 | deferred | Optional UUIDv7 request IDs; the included log collision fix already keeps IDs unique. |
+| df2774ca186731d257cff166638d2ebb5bdf06ef | feat(oauth): support per-channel model settings overrides | deferred | Feature: per-channel OAuth model settings overrides. |
+| 9a3b869f6092b82205f587a163417c98fbc9d14c | feat(models): add claude-sonnet-5-5 model | deferred | Claude Sonnet 5.5 catalog entry; no Claude provider is configured. |
+| dace3bb99fe1fa728657f2d2cac49c01ebe4ba44 | docs(agents): mark /v0/management endpoints as deprecated | excluded | Upstream v8 management documentation. |
+| 93b683cc53fabcade6046a4bf9164facf6cf0c7d | docs(readme): remove CyberPay sponsor | excluded | Upstream sponsorship documentation. |
+| 775a308f0d2de46df76d2a085ba9cf2849de88cf | test(config): add test for DELETE operation preserving document presence | deferred | Test for the v8 configuration management API. |
+| 743bbdfc1a8b79e636e2bf440f232da0647a22f3 | feat(readme): update OpenLux sponsorship details and promotional offer | excluded | Upstream sponsorship documentation. |
+| 07c5dc0cda968229ca173c1fa9dfd5f75d36bf08 | feat(readme): update OpenLux sponsorship links and promotional offer | excluded | Upstream sponsorship documentation. |
+| cb9a0b5ce88e288e8278df5b7420581a07214487 | feat(thinking): support output_config.effort for enabled Claude thinking | deferred | Claude `output_config.effort`; no Claude provider is configured. |
+| a0cc065d4d3152e933bbbd5a8d27c501ea29f26c | fix(claude): distinguish claude-sonnet-5-5 from sonnet-5 in model checks | deferred | Claude Sonnet 5.5 model checks; no Claude provider is configured. |
+| fbc8e443f03667eab59903cecaaeb4e283b32434 | fix(claude): replay thinking block before tool use after web search result | deferred | Responses-to-Claude translator ordering; only reached with a Claude provider target. |
+| b7f321f2a1a871f31d815bb5c92e6758b03bfc2d | feat(api): support request path overrides and image protocols in model execution | deferred | Feature: request path overrides and image protocols. |
+| 02548d6727a09ebf06574342aab2cbf347e5f184 | fix(auth): log warnings on auth persistence failures | adapted | Warn when credential persistence fails. Lite has no Meta mint path, so the update path always warns and the Meta-only test is omitted. |
+| c8a2bfe8f5c6eaca54c81a86c36aa88905d342d6 | feat(models): add gpt-6.1-sol model | adapted | Only the gpt-6.1-sol entries (embedded Codex client catalog and codex-team/plus/pro). The catalog snapshot refresh and the fetch_codex_models 0.159.0 bump are not taken: identity and catalog fetching share 0.155.0 (CUSTOMIZATIONS.md item 2), which meets the model's 0.153.0 floor. |
+| 81756a57e3a4a0adf2f76ed1413f34fdc2c77c11 | fix(auth): track auto-refresh job epochs and bound credential acquisition | adapted | Refresh job registration epochs and bounded Antigravity credential acquisition. The loop keeps Lite's direct executor map lookup. |
+| f1697119f6b0d87352bcd116093ff80011e8165d | fix(interactions): handle failure events in response translators and stream executor | deferred | Devin executor portion is excluded; the Interactions translators carry no production traffic. |
+| 6004ebdfdb0f9870f5cdfbf765f5dfaadd1d9242 | fix(claude): fail open on unmapped oauth mcp tool aliases | deferred | Claude OAuth executor MCP alias handling; production has no Claude accounts. |
+| 369df975eac7f258dc1f8fd3945c6b9eb3fbdf80 | fix(claude): map and disambiguate tool names in responses translation | deferred | Responses-to-Claude tool name mapping; only reached with a Claude provider target. |
+| f33f04d6c0c9b3d326f6b89527ccca224b489330 | fix(codex): convert agent_message in compat mode without multi-agent optimization | deferred | Applies to codex-api-key compatibility models only, which are not configured. |
+| 71a5f1f6c5b38341a7dc5de524a0d88f4f7cc431 | fix(codex): normalize tool parameter number types to integer for codex clients | adapted | Codex client tool integer normalization for non-Codex targets. Lite's model-based multi-agent call is kept, the WebSocket change goes to Lite's stream path, and Meta hunks are omitted. |
+| 097511b81fff16569d67bb7fe8bd1779c27178f8 | fix(management): remove deprecated credential quota endpoints from v8 API | deferred | v8 management API endpoint removal; Lite keeps its current endpoints. |
+| bfa5aed4ea258ace188e81e651f2d04bd9472ce6 | fix(home): defer plugin load marking and preempt failing config on retry | excluded | Plugin load marking; dynamic plugins are removed. |
+| 4b4a444880f307a9b32412a6d69c399c7c68b93a | fix(claude): normalize boolean subschemas in tool parameter schemas | deferred | Claude Messages to OpenAI schema normalization; no Claude-format client traffic in production. |
+| e5b5a1cfca354ec80d5c31242ccfb6c0f6b5fbcd | fix(kimi): reorder interleaved tool outputs in responses input | deferred | Kimi is not configured. |
+| 82f8e92b21e5e1e277d6c4c4e2ee14d92a31f96e | fix(executor): support negotiated ALPN protocols in uTLS client | excluded | Lite's uTLS round tripper already selects HTTP/2 or HTTP/1.1 from ALPN, with response header limits and cancellation handling. |
+| a8ffd5a8432849cdefe333ffa132b8ada770c671 | fix(codex): skip tool parameter integer normalization for codex executor targets | adapted | Native Codex HTTP, compact, stream and WebSocket targets skip integer normalization, fixing the reserved-tool regression of 71a5f1f6. Meta tests are omitted. |
+| 67cb32b6d3a01f4d6af10765f4745eb37ac1b9e7 | fix(codex): determine tool integer normalization by target executor identity | adapted | Identity-only Codex target check, combined with 97f244b8 in one Lite commit. |
+| 9e71c20d016960cd47bb8532a16fcf1f16f5fff3 | fix(codex): handle upstream stream disconnect before first payload as bad gateway | included | A Codex stream that closes before its first payload is a 502 credential failure and fails over; streams with output do not. |
+| 97f244b8ddb9cbf564b6e6faab0159102cca8617 | fix(codex): pass target executor to compatibility translation and token counting | adapted | Codex token counting and xAI translation pass their executor identity. Lite lacks the update-intent helpers, so executor-aware variants are added to the existing helpers; a Lite test locks the Codex-to-Antigravity path. |

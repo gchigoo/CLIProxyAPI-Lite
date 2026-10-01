@@ -113,3 +113,14 @@ Executed on macOS arm64 with Go 1.26.1 and CGO_ENABLED=0:
 - The Linux amd64 cross-build passed and carries `xai-grok-workspace/1.0.44`.
 
 Linux tests were not executed locally. Unit tests do not establish live xAI availability; production probe evidence is recorded outside this public repository.
+
+## Selective update through v8.0.8 (2026-10-02)
+
+Executed on macOS arm64 with Go 1.26.1:
+
+- Each backport ran its affected package tests. The integer normalization regression (native Codex HTTP, WebSocket and fallback paths) and the executor-identity check were observed failing before their fixes and passing after.
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed: 87 packages with tests, 29 without.
+- `CGO_ENABLED=1 go test -race` passed for sdk/cliproxy/auth, internal/runtime/executor/..., internal/client/codex/... and test; the new refresh-epoch tests also passed five repeated race runs.
+- gofmt reported no changes in modified Go files; `git diff --check` passed; Linux amd64, macOS arm64 and Windows amd64 builds passed.
+
+`TestAntigravityAuthHasCreditsRequiredHomeBalanceUsesKV` fails when repeated with `-count>1` in one process, on the baseline as well; it passes in normal single runs and is a pre-existing test isolation issue. Linux tests were not executed locally. Independent review and production evidence are pending and recorded separately.
