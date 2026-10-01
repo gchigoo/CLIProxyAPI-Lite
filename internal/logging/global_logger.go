@@ -35,12 +35,13 @@ var logFieldOrder = []string{
 	"provider", "model",
 	"version",
 	"mode", "budget", "level", "original_mode", "original_value", "min", "max", "clamped_to", "error",
-	"credential", "connection", "proxy_scheme", "remote_transport",
+	"credential", "auth_id", "connection", "proxy_scheme", "remote_transport",
 	"media_session_id", "call_id", "peer", "state", "reason",
 }
 
 var quotedLogFields = map[string]struct{}{
 	"credential":       {},
+	"auth_id":          {},
 	"connection":       {},
 	"proxy_scheme":     {},
 	"remote_transport": {},
