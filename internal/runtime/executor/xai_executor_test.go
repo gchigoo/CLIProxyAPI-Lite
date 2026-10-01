@@ -6316,3 +6316,17 @@ func TestXAIExecutorExecuteVideosOAuthBaseURLResolution(t *testing.T) {
 		})
 	}
 }
+
+func TestXAIExecutorPrepareResponsesRequestPreservesCodexNumberToolSchemas(t *testing.T) {
+	exec := &XAIExecutor{}
+	payload := []byte(`{"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"functions__exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}]}]}`)
+	prepared, err := exec.prepareResponsesRequest(context.Background(), cliproxyexecutor.Request{Model: "grok-4", Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatCodex, Headers: http.Header{"User-Agent": []string{"codex_cli_rs/0.1"}}}, false)
+	if err != nil {
+		t.Fatalf("prepareResponsesRequest() error = %v", err)
+	}
+	for _, path := range []string{"tools.0.parameters.properties.yield_time_ms.type", "tools.1.parameters.properties.yield_time_ms.type"} {
+		if got := gjson.GetBytes(prepared.body, path).String(); got != "integer" {
+			t.Errorf("%s = %q, want integer; body=%s", path, got, prepared.body)
+		}
+	}
+}
