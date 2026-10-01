@@ -123,4 +123,4 @@ Executed on macOS arm64 with Go 1.26.1:
 - `CGO_ENABLED=1 go test -race` passed for sdk/cliproxy/auth, internal/runtime/executor/..., internal/client/codex/... and test; the new refresh-epoch tests also passed five repeated race runs.
 - gofmt reported no changes in modified Go files; `git diff --check` passed; Linux amd64, macOS arm64 and Windows amd64 builds passed.
 
-`TestAntigravityAuthHasCreditsRequiredHomeBalanceUsesKV` fails when repeated with `-count>1` in one process, on the baseline as well; it passes in normal single runs and is a pre-existing test isolation issue. Linux tests were not executed locally. Independent review and production evidence are pending and recorded separately.
+`TestAntigravityAuthHasCreditsRequiredHomeBalanceUsesKV` fails when repeated with `-count>1` in one process, on the baseline as well; it passes in normal single runs and is a pre-existing test isolation issue. Linux tests were not executed locally. The review fixes above each have a test that failed before the fix and passes after it; the refresh and credits tests also passed five repeated race runs. Production evidence is recorded separately.

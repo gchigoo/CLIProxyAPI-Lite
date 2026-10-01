@@ -421,3 +421,13 @@ Baseline: e5660f35 (the recorded 2026-09-28 build plus the xAI hotfix). Triaged 
 | 67cb32b6d3a01f4d6af10765f4745eb37ac1b9e7 | fix(codex): determine tool integer normalization by target executor identity | adapted | Identity-only Codex target check, combined with 97f244b8 in one Lite commit. |
 | 9e71c20d016960cd47bb8532a16fcf1f16f5fff3 | fix(codex): handle upstream stream disconnect before first payload as bad gateway | included | A Codex stream that closes before its first payload is a 502 credential failure and fails over; streams with output do not. |
 | 97f244b8ddb9cbf564b6e6faab0159102cca8617 | fix(codex): pass target executor to compatibility translation and token counting | adapted | Codex token counting and xAI translation pass their executor identity. Lite lacks the update-intent helpers, so executor-aware variants are added to the existing helpers; a Lite test locks the Codex-to-Antigravity path. |
+
+### Independent review fixes
+
+An independent read-only review of e5660f35..1ea6f4f8 returned FAIL with five blocking findings. Four are fixed in one Lite follow-up commit; one is retained by decision:
+
+- Queued auto-refresh jobs now record their queue time and, after taking the per-auth refresh lock, skip auths that reached a terminal HTTP 401 or were refreshed after queueing. Request-time refreshes are unchanged.
+- A queued, not yet running job from a replaced registration epoch no longer blocks the replacement registration from queueing its own job.
+- Optional Antigravity credits work on a lifecycle that is never canceled (request-time token refresh) now has its own 60 second bound, so a stalled lookup cannot block later credits refreshes. Cancelable lifecycles keep upstream's no-timer behavior. This intentionally differs from upstream 81756a57, whose tests require no deadline in this case; those assertions are adapted.
+- The native Codex image path passes the Codex executor identity to payload configuration, so it never normalizes tool types.
+- Retained: Codex tool integer normalization still runs before payload default/override rules, matching upstream. Payload rules are explicit operator configuration, and CUSTOMIZATIONS.md keeps explicit overrides effective; the deployed configuration defines no payload rules.

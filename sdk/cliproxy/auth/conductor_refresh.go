@@ -328,13 +328,23 @@ func (m *Manager) markRefreshPending(loop *authAutoRefreshLoop, id string, regis
 		m.mu.Unlock()
 		return nil
 	}
-	if m.refreshJobs[id] != nil || (!auth.NextRefreshAfter.IsZero() && now.Before(auth.NextRefreshAfter)) {
+	if existing := m.refreshJobs[id]; existing != nil {
+		if existing.running || existing.registrationEpoch == registrationEpoch {
+			m.mu.Unlock()
+			return nil
+		}
+		// A queued job from a replaced registration must not block the new one.
+		// Its pointer no longer matches, so the worker skips it when dequeued.
+		delete(m.refreshJobs, id)
+	}
+	if !auth.NextRefreshAfter.IsZero() && now.Before(auth.NextRefreshAfter) {
 		m.mu.Unlock()
 		return nil
 	}
 	job := &authRefreshJob{
 		id:                id,
 		registrationEpoch: registrationEpoch,
+		queuedAt:          now,
 		pendingUntil:      now.Add(refreshPendingBackoff),
 		loop:              loop,
 	}
@@ -549,10 +559,16 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 // failedAccessToken lets concurrent callers reuse a refresh that already replaced the
 // access token that produced the unauthorized response.
 func (m *Manager) refreshAuthForRequest(ctx context.Context, id, failedAccessToken string) (*Auth, error) {
-	return m.refreshAuthForRequestAtEpoch(ctx, id, failedAccessToken, 0)
+	return m.refreshAuthForRequestAtEpoch(ctx, id, failedAccessToken, 0, time.Time{})
 }
 
-func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAccessToken string, registrationEpoch uint64) (*Auth, error) {
+// refreshAuthForJob runs a queued auto-refresh job. It skips auths that a
+// request-time refresh terminated or refreshed after the job was queued.
+func (m *Manager) refreshAuthForJob(ctx context.Context, job *authRefreshJob) (*Auth, error) {
+	return m.refreshAuthForRequestAtEpoch(ctx, job.id, "", job.registrationEpoch, job.queuedAt)
+}
+
+func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAccessToken string, registrationEpoch uint64, queuedAt time.Time) (*Auth, error) {
 	if m == nil {
 		return nil, errors.New("auth manager is nil")
 	}
@@ -587,6 +603,14 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 	}
 	if registrationEpoch != 0 && auth.RegistrationEpoch != registrationEpoch {
 		return nil, errors.New("auth registration changed before refresh")
+	}
+	if !queuedAt.IsZero() {
+		if hasUnauthorizedAuthFailure(auth) {
+			return nil, errors.New("auth has a terminal unauthorized failure")
+		}
+		if auth.LastRefreshedAt.After(queuedAt) {
+			return auth, nil
+		}
 	}
 	if hasDisabledInvalidGrantFailure(auth) {
 		return nil, errors.New("auth is disabled with invalid grant")

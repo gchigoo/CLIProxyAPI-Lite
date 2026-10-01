@@ -81,6 +81,10 @@ type antigravityCreditsBalance struct {
 	Known           bool
 }
 
+// antigravityCreditsUnboundLifecycleTimeout bounds optional credits work whose
+// lifecycle can never be canceled, such as request-time token refresh.
+const antigravityCreditsUnboundLifecycleTimeout = 60 * time.Second
+
 type antigravityCreditsHintRefreshState struct {
 	mu                sync.Mutex
 	registrationEpoch uint64
@@ -464,6 +468,10 @@ func (e *AntigravityExecutor) queueAntigravityCreditsRefresh(ctx context.Context
 			lifecycle = context.WithValue(lifecycle, "cliproxy.roundtripper", rt)
 		}
 		refreshCtx, cancelRefresh = context.WithTimeout(lifecycle, timeout)
+	} else if lifecycle.Done() == nil {
+		// A lifecycle that is never canceled still needs an end, or a stalled
+		// lookup would block every later credits refresh for this auth.
+		refreshCtx, cancelRefresh = context.WithTimeout(lifecycle, antigravityCreditsUnboundLifecycleTimeout)
 	} else {
 		// Optional post-refresh work follows its lifecycle without adding a timer.
 		refreshCtx, cancelRefresh = context.WithCancel(lifecycle)
