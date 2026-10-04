@@ -202,6 +202,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(nil, streamScannerBuffer)
 		claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
+		var pendingJSON []byte
 		var param any
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -215,8 +216,40 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			line = helps.FilterSSEUsageMetadata(line)
 
 			payload := helps.JSONPayload(line)
+			if len(pendingJSON) > 0 {
+				trimmedLine := bytes.TrimSpace(line)
+				if bytes.HasPrefix(trimmedLine, []byte("data:")) {
+					trimmedLine = bytes.TrimSpace(trimmedLine[len("data:"):])
+				}
+				if len(trimmedLine) > 0 {
+					pendingJSON = append(pendingJSON, '\n')
+					pendingJSON = append(pendingJSON, trimmedLine...)
+				}
+				if !gjson.ValidBytes(pendingJSON) {
+					continue
+				}
+				payload = pendingJSON
+				pendingJSON = nil
+			} else if payload != nil && !gjson.ValidBytes(payload) {
+				pendingJSON = append([]byte(nil), payload...)
+				continue
+			}
 			if payload == nil {
 				continue
+			}
+			if errorResult := gjson.GetBytes(payload, "error"); errorResult.Exists() {
+				statusCode := int(errorResult.Get("code").Int())
+				if statusCode < http.StatusBadRequest || statusCode > 599 {
+					statusCode = http.StatusBadGateway
+				}
+				streamErr := newAntigravityStatusErr(statusCode, payload)
+				helps.RecordAPIResponseError(ctx, e.cfg, streamErr)
+				reporter.PublishFailure(ctx, streamErr)
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Err: streamErr}:
+				case <-ctx.Done():
+				}
+				return
 			}
 
 			if detail, ok := helps.ParseAntigravityStreamUsage(payload); ok {
