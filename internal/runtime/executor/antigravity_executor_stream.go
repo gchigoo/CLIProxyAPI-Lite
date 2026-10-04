@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
@@ -203,6 +204,20 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		scanner.Buffer(nil, streamScannerBuffer)
 		claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
 		var pendingJSON []byte
+		var terminalDelivered bool
+		var replayCommitted bool
+		commitReplay := func() {
+			if !replayCommitted && replayAccumulator != nil {
+				replayAccumulator.Commit(ctx)
+				replayCommitted = true
+			}
+		}
+		defer func() {
+			// A client that disconnects after the terminal chunk still completed the turn.
+			if terminalDelivered {
+				commitReplay()
+			}
+		}()
 		var param any
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -258,6 +273,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 			payload = e.resolveWebSearchGroundingURLs(ctx, auth, from, originalPayload, translated, payload)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, bytes.Clone(payload), &param, claudeInputTokens)
+			isTerminalChunk := antigravityStreamPayloadHasFinishReason(payload) || (replayAccumulator != nil && replayAccumulator.terminal)
 			for i := range chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
@@ -265,8 +281,15 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					return
 				}
 			}
+			if isTerminalChunk {
+				terminalDelivered = true
+			}
 		}
 		if errScan := scanner.Err(); errScan != nil {
+			if terminalDelivered && errors.Is(errScan, context.Canceled) && ctx.Err() != nil {
+				// Usage was published with the terminal chunk; the disconnect is not a failure.
+				return
+			}
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
 			reporter.PublishFailure(ctx, errScan)
 			select {
@@ -285,13 +308,21 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					return
 				}
 			}
-			if replayAccumulator != nil {
-				replayAccumulator.Commit(ctx)
-			}
+			commitReplay()
 			reporter.EnsurePublished(ctx)
 		}
 	}(httpResp)
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+}
+
+// antigravityStreamPayloadHasFinishReason reports whether an upstream frame ends the response.
+func antigravityStreamPayloadHasFinishReason(payload []byte) bool {
+	for _, path := range []string{"candidates.0.finishReason", "response.candidates.0.finishReason"} {
+		if strings.TrimSpace(gjson.GetBytes(payload, path).String()) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *AntigravityExecutor) executeCompactionStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
