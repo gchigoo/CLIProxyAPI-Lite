@@ -135,11 +135,37 @@ func cleanJSONSchema(jsonStr string, options jsonSchemaCleanOptions) string {
 		jsonStr = removeKeywords(jsonStr, []string{"title"})
 	}
 	jsonStr = cleanupRequiredFields(jsonStr)
+	jsonStr = sanitizeObjectProperties(jsonStr)
 	// Phase 4: Add placeholder for empty object schemas (Claude VALIDATED mode requirement)
 	if options.addPlaceholder {
 		jsonStr = addEmptySchemaPlaceholder(jsonStr)
 	}
 
+	return jsonStr
+}
+
+// sanitizeObjectProperties ensures that any schema node declaring "properties" has "type": "object".
+// Gemini's protobuf validator enforces a strict field predicate on properties and required ($type == Type.OBJECT);
+// if type is missing or not object, it is normalized to object so nested properties and required fields remain valid.
+func sanitizeObjectProperties(jsonStr string) string {
+	paths := findPaths(jsonStr, "properties")
+	sortByDepth(paths)
+	for _, p := range paths {
+		parentPath := trimSuffix(p, ".properties")
+		if isPropertyDefinition(parentPath) {
+			continue
+		}
+		props := gjson.Get(jsonStr, p)
+		if !props.IsObject() {
+			continue
+		}
+		typePath := joinPath(parentPath, "type")
+		t := gjson.Get(jsonStr, typePath).String()
+		if !strings.EqualFold(t, "object") {
+			updated, _ := sjson.SetBytes([]byte(jsonStr), typePath, "object")
+			jsonStr = string(updated)
+		}
+	}
 	return jsonStr
 }
 
@@ -419,6 +445,10 @@ func repairSchemaNode(node map[string]any, addMissingArrayItems bool) (map[strin
 
 	// 2. If node has a "properties" map, recursively repair all properties inside it
 	if propsVal, ok := clone["properties"].(map[string]any); ok {
+		if _, hasType := clone["type"]; !hasType {
+			clone["type"] = "object"
+			modified = true
+		}
 		repairedProps, promotedReqs, propsMod := repairPropertyMap(propsVal, addMissingArrayItems)
 		if propsMod {
 			clone["properties"] = repairedProps
@@ -1047,6 +1077,10 @@ func flattenAnyOfOneOf(jsonStr string) string {
 					updated, _ := sjson.SetBytes([]byte(jsonStr), joinPath(parentPath, "nullable"), true)
 					jsonStr = string(updated)
 				}
+				if parent.Get("type").String() == "" {
+					updated, _ := sjson.SetBytes([]byte(jsonStr), joinPath(parentPath, "type"), "object")
+					jsonStr = string(updated)
+				}
 				jsonStr, _ = sjson.Delete(jsonStr, p)
 				continue
 			}
@@ -1133,15 +1167,19 @@ func flattenTypeArrays(jsonStr string, preserveNativeNullable bool) string {
 			}
 		}
 
+		parentPath := trimSuffix(p, ".type")
 		firstType := "string"
 		if len(nonNullTypes) > 0 {
-			firstType = nonNullTypes[0]
+			if gjson.Get(jsonStr, joinPath(parentPath, "properties")).Exists() && contains(nonNullTypes, "object") {
+				firstType = "object"
+			} else {
+				firstType = nonNullTypes[0]
+			}
 		}
 
 		updated, _ := sjson.SetBytes([]byte(jsonStr), p, firstType)
 		jsonStr = string(updated)
 
-		parentPath := trimSuffix(p, ".type")
 		if len(nonNullTypes) > 1 {
 			hint := "Accepts: " + strings.Join(nonNullTypes, " | ")
 			jsonStr = appendHint(jsonStr, parentPath, hint)
