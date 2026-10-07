@@ -124,3 +124,14 @@ Executed on macOS arm64 with Go 1.26.1:
 - gofmt reported no changes in modified Go files; `git diff --check` passed; Linux amd64, macOS arm64 and Windows amd64 builds passed.
 
 `TestAntigravityAuthHasCreditsRequiredHomeBalanceUsesKV` fails when repeated with `-count>1` in one process, on the baseline as well; it passes in normal single runs and is a pre-existing test isolation issue. Linux tests were not executed locally. The review fixes above each have a test that failed before the fix and passes after it; the refresh and credits tests also passed five repeated race runs. Production evidence is recorded separately.
+
+## Selective update through v8.0.20 (2026-10-08)
+
+Executed on macOS arm64 with Go 1.27.1:
+
+- Every pick was built and vetted before its commit; adapted picks also ran their affected package tests, including the new Antigravity backend-error and terminal-disconnect tests, the CAQS replay tests and the credential-version tests.
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed: 87 packages with tests, 30 without. The same command passed on the v8.0.8 baseline before the update.
+- `CGO_ENABLED=1 go test -race -count=1` passed for sdk/cliproxy/auth, internal/runtime/executor/..., internal/util, internal/translator/codex/..., sdk/api/handlers/... and test; the refresh, unauthorized, snapshot and credential-version auth tests also passed five repeated race runs.
+- gofmt reported no changes in modified Go files; `git diff --check` passed; Linux amd64, macOS arm64 and Windows amd64 builds with `-trimpath -ldflags="-s -w"` passed. Linux amd64 SHA-256: `4db49fae92814623a9522f44c111482c970f9fc64b7de77f92ce11a7c358ef16`.
+
+No live provider requests were made and the Linux and Windows binaries were not run. `claude_thinking_replay_test.go` and `codex_stream_bootstrap_buffering_test.go` are not gofmt-clean on the baseline either and were left unchanged.
