@@ -1615,3 +1615,56 @@ func TestMetaExecutor_Execute_PreservesMuseReasoningEncryptedContent_Issue6450(t
 		t.Fatalf("stream Claude reasoning id should be dropped: %s", gotBody)
 	}
 }
+
+func TestMetaExecutor_NotFoundCooldown_Shortened_Issue6117(t *testing.T) {
+	previous := cliproxyauth.QuotaCooldownDisabledForAuth(nil)
+	cliproxyauth.SetQuotaCooldownDisabled(false)
+	t.Cleanup(func() { cliproxyauth.SetQuotaCooldownDisabled(previous) })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"model_not_found","message":"model not found"}}`))
+	}))
+	defer server.Close()
+
+	manager := cliproxyauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(NewMetaExecutor(&config.Config{}))
+	auth := &cliproxyauth.Auth{
+		ID:       "meta-404-test",
+		Provider: "meta",
+		Metadata: map[string]any{
+			"api_key":   "LLM|test",
+			"auth_kind": "oauth",
+		},
+		Attributes: map[string]string{
+			"base_url": server.URL,
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, "meta", []*registry.ModelInfo{{ID: "muse-spark-1.3"}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
+
+	req := cliproxyexecutor.Request{
+		Model:   "muse-spark-1.3",
+		Payload: []byte(`{"model":"muse-spark-1.3","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	_, _ = manager.Execute(context.Background(), []string{"meta"}, req, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai"),
+	})
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("expected auth to be registered")
+	}
+	state := updated.ModelStates["muse-spark-1.3"]
+	if state == nil || !state.Unavailable {
+		t.Fatalf("expected model state to be unavailable, got %#v", state)
+	}
+	remaining := time.Until(state.NextRetryAfter)
+	if remaining < 4*time.Minute || remaining > 6*time.Minute {
+		t.Fatalf("expected short ~5m cooldown for Meta 404, got remaining=%v", remaining)
+	}
+}

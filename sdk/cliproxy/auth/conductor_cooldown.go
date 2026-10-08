@@ -846,6 +846,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					if isModelSupportResultError(result.Error) {
 						if disableCooling {
 							state.NextRetryAfter = time.Time{}
+						} else if retryAfter, ok := metaNotFoundRetryAfter(auth.Provider, result.RetryAfter); ok {
+							state.NextRetryAfter = now.Add(retryAfter)
 						} else {
 							next := now.Add(12 * time.Hour)
 							state.NextRetryAfter = next
@@ -881,6 +883,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						case 404:
 							if disableCooling {
 								state.NextRetryAfter = time.Time{}
+							} else if retryAfter, ok := metaNotFoundRetryAfter(auth.Provider, result.RetryAfter); ok {
+								state.NextRetryAfter = now.Add(retryAfter)
 							} else {
 								next := now.Add(12 * time.Hour)
 								state.NextRetryAfter = next
@@ -2250,6 +2254,17 @@ func isRequestInvalidError(err error) bool {
 	return false
 }
 
+// metaNotFoundRetryAfter returns the executor's retry-after for a Meta 404 or
+// model-support failure. Lite gates this to Meta: other executors attach
+// rate-limit reset times to unrelated 4xx responses, which must keep the
+// fixed not-found cooldown.
+func metaNotFoundRetryAfter(provider string, retryAfter *time.Duration) (time.Duration, bool) {
+	if retryAfter == nil || *retryAfter <= 0 || !strings.EqualFold(strings.TrimSpace(provider), "meta") {
+		return 0, false
+	}
+	return *retryAfter, true
+}
+
 func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Duration, now time.Time, disableCooling bool) {
 	if auth == nil {
 		return
@@ -2311,6 +2326,8 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 			auth.StatusMessage = "not_found"
 			if disableCooling {
 				auth.NextRetryAfter = time.Time{}
+			} else if delay, ok := metaNotFoundRetryAfter(auth.Provider, retryAfter); ok {
+				auth.NextRetryAfter = now.Add(delay)
 			} else {
 				auth.NextRetryAfter = now.Add(12 * time.Hour)
 			}
