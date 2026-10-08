@@ -31,12 +31,19 @@ func record(authID, model, served string) coreusage.Record {
 	return coreusage.Record{AuthID: authID, Model: model, ResponseModel: served}
 }
 
+// substitutedRecord is a record the usage reporter marked as a substitution.
+func substitutedRecord(authID, model, served string) coreusage.Record {
+	rec := record(authID, model, served)
+	rec.ResponseModelSubstituted = true
+	return rec
+}
+
 func TestTrackerAggregatesPairsAndFlagsSubstitution(t *testing.T) {
 	tracker, _ := newTestTracker()
 	ctx := context.Background()
 	tracker.HandleUsage(ctx, record("auth-1", "gpt-5.6-sol", "gpt-5.6-sol"))
-	tracker.HandleUsage(ctx, record("auth-1", "gpt-5.6-sol(high)", "gpt-5.5-mini"))
-	tracker.HandleUsage(ctx, record("auth-1", "gpt-5.6-sol", "gpt-5.5-mini"))
+	tracker.HandleUsage(ctx, substitutedRecord("auth-1", "gpt-5.6-sol(high)", "gpt-5.5-mini"))
+	tracker.HandleUsage(ctx, substitutedRecord("auth-1", "gpt-5.6-sol", "gpt-5.5-mini"))
 	tracker.HandleUsage(ctx, record("auth-1", "gpt-5.6-terra", "gpt-5.6-terra-2026-05-13"))
 
 	got := tracker.Snapshot("auth-1")
@@ -61,12 +68,18 @@ func TestTrackerAggregatesPairsAndFlagsSubstitution(t *testing.T) {
 	}
 }
 
-func TestTrackerCaseOnlyDifferenceIsNotSubstitution(t *testing.T) {
+func TestTrackerMirrorsReporterSubstitutionFlag(t *testing.T) {
 	tracker, _ := newTestTracker()
-	tracker.HandleUsage(context.Background(), record("auth-1", "gpt-5.6-sol", "GPT-5.6-Sol"))
+	ctx := context.Background()
+	// A mapped upstream model (for example Kimi's canonical ID) is not flagged by the reporter.
+	tracker.HandleUsage(ctx, record("auth-1", "kimi-k2.7-code", "kimi-for-coding"))
 	got := tracker.Snapshot("auth-1")
-	if len(got) != 1 || got[0].Substituted || got[0].ServedModel != "GPT-5.6-Sol" {
-		t.Fatalf("Snapshot() = %+v, want one unsubstituted entry keeping the reported case", got)
+	if len(got) != 1 || got[0].Substituted {
+		t.Fatalf("Snapshot() = %+v, want one unsubstituted entry", got)
+	}
+	tracker.HandleUsage(ctx, substitutedRecord("auth-1", "kimi-k2.7-code", "kimi-for-coding"))
+	if got = tracker.Snapshot("auth-1"); len(got) != 1 || !got[0].Substituted || got[0].Count != 2 {
+		t.Fatalf("Snapshot() = %+v, want the latest reporter flag with count 2", got)
 	}
 }
 
@@ -85,7 +98,7 @@ func TestTrackerIgnoresRecordsWithoutAuthOrServedModel(t *testing.T) {
 
 func TestTrackerCountsFailedRecordsThatReportAModel(t *testing.T) {
 	tracker, _ := newTestTracker()
-	rec := record("auth-1", "gpt-5.6-sol", "gpt-5.5-mini")
+	rec := substitutedRecord("auth-1", "gpt-5.6-sol", "gpt-5.5-mini")
 	rec.Failed = true
 	tracker.HandleUsage(context.Background(), rec)
 	got := tracker.Snapshot("auth-1")
@@ -202,7 +215,7 @@ func TestDefaultTrackerReceivesPublishedUsage(t *testing.T) {
 	coreusage.RegisterNamedPlugin(t.Name(), signal)
 	t.Cleanup(func() { coreusage.RegisterNamedPlugin(t.Name(), noopPlugin{}) })
 
-	coreusage.PublishRecord(context.Background(), coreusage.Record{AuthID: authID, Model: "gpt-5.6-sol", ResponseModel: "gpt-5.5-mini", RequestedAt: time.Now()})
+	coreusage.PublishRecord(context.Background(), coreusage.Record{AuthID: authID, Model: "gpt-5.6-sol", ResponseModel: "gpt-5.5-mini", ResponseModelSubstituted: true, RequestedAt: time.Now()})
 	select {
 	case <-signal.seen:
 	case <-time.After(5 * time.Second):

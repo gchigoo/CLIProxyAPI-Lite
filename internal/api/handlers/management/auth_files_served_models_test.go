@@ -68,7 +68,7 @@ func TestListAuthFiles_IncludesServedModelsWhenObserved(t *testing.T) {
 	ctx := context.Background()
 	tracker := servedmodel.Default()
 	tracker.HandleUsage(ctx, coreusage.Record{AuthID: observedID, Model: "gpt-5.6-sol", ResponseModel: "gpt-5.6-sol"})
-	tracker.HandleUsage(ctx, coreusage.Record{AuthID: observedID, Model: "gpt-5.6-sol", ResponseModel: "gpt-5.5-mini"})
+	tracker.HandleUsage(ctx, coreusage.Record{AuthID: observedID, Model: "gpt-5.6-sol", ResponseModel: "gpt-5.5-mini", ResponseModelSubstituted: true})
 
 	entries := listAuthFileEntries(t, manager)
 

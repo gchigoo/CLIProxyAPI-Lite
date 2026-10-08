@@ -45,6 +45,9 @@ type Record struct {
 	ResponseServiceTier string
 	// ResponseModel stores the model name reported by the upstream response, empty when unknown.
 	ResponseModel string
+	// ResponseModelSubstituted reports whether ResponseModel differs from the model
+	// the upstream was expected to serve, using the same rule as the substitution warning.
+	ResponseModelSubstituted bool
 	// Generate reports whether the client requested actual generation.
 	// nil or true means generation is enabled; only an explicit false disables generation.
 	// Use GenerateFlag to set the value and GenerateEnabled to read it with the default.

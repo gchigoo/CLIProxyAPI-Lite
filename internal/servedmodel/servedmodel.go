@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
@@ -121,11 +120,13 @@ func (t *Tracker) HandleUsage(_ context.Context, record coreusage.Record) {
 		state = &pairState{entry: Entry{
 			RequestedModel: requested,
 			ServedModel:    served,
-			Substituted:    helps.IsModelSubstituted(requested, served),
 			FirstSeen:      now,
 		}}
 		summary.pairs[key] = state
 	}
+	// The reporter judges substitution against the model it expected upstream,
+	// which differs from Record.Model for mapped models.
+	state.entry.Substituted = record.ResponseModelSubstituted
 	state.entry.Count++
 	state.entry.LastSeen = now
 	state.seq = t.seq

@@ -245,8 +245,23 @@ func (r *UsageReporter) IsResponseModelFinal() bool {
 // warnModelSubstitution warns about a silent upstream model swap, and labels the
 // credential by index only, never by account.
 func (r *UsageReporter) warnModelSubstitution(ctx context.Context) {
-	if r == nil {
+	if r == nil || !r.ResponseModelSubstituted() {
 		return
+	}
+	served := r.ResponseModel()
+	providerName := strings.TrimSpace(r.provider)
+	if providerName == "" {
+		providerName = "unknown"
+	}
+	LogWithRequestID(ctx).Warnf("%s executor: upstream served model %q for requested model %q (auth_index=%s)", providerName, served, r.model, r.authIndexForLog())
+}
+
+// ResponseModelSubstituted reports whether the upstream served a model other than
+// the expected upstream model (or the requested model when none was set). A mapped
+// model such as Kimi's canonical upstream ID is not a substitution.
+func (r *UsageReporter) ResponseModelSubstituted() bool {
+	if r == nil {
+		return false
 	}
 	served := r.ResponseModel()
 	expectedModel := r.UpstreamModel()
@@ -254,16 +269,9 @@ func (r *UsageReporter) warnModelSubstitution(ctx context.Context) {
 		expectedModel = r.model
 	}
 	if served == "" || !IsModelSubstituted(expectedModel, served) {
-		return
+		return false
 	}
-	if r.model != "" && !IsModelSubstituted(r.model, served) {
-		return
-	}
-	providerName := strings.TrimSpace(r.provider)
-	if providerName == "" {
-		providerName = "unknown"
-	}
-	LogWithRequestID(ctx).Warnf("%s executor: upstream served model %q for requested model %q (auth_index=%s)", providerName, served, r.model, r.authIndexForLog())
+	return r.model == "" || IsModelSubstituted(r.model, served)
 }
 
 // authIndexForLog labels the credential without exposing its file name or account.
@@ -566,8 +574,10 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 	// Additional-model records describe a side model (image generation tool usage) that
 	// the upstream response model never refers to, so they must stay empty.
 	responseModel := ""
+	responseModelSubstituted := false
 	if model == r.model {
 		responseModel = r.ResponseModel()
+		responseModelSubstituted = r.ResponseModelSubstituted()
 	}
 	return usage.Record{
 		Provider:            r.provider,
@@ -586,14 +596,16 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		ServiceTier:         r.serviceTier,
 		ResponseServiceTier: strings.TrimSpace(detail.ResponseServiceTier),
 		ResponseModel:       responseModel,
-		Generate:            usage.GenerateFlag(r.generate),
-		Stream:              r.stream,
-		RequestedAt:         r.requestedAt,
-		Latency:             r.latency(),
-		TTFT:                r.ttftDuration(),
-		Failed:              failed,
-		Fail:                fail,
-		Detail:              detail,
+		// Kept with ResponseModel so the served-model summary uses the warning's rule.
+		ResponseModelSubstituted: responseModelSubstituted,
+		Generate:                 usage.GenerateFlag(r.generate),
+		Stream:                   r.stream,
+		RequestedAt:              r.requestedAt,
+		Latency:                  r.latency(),
+		TTFT:                     r.ttftDuration(),
+		Failed:                   failed,
+		Fail:                     fail,
+		Detail:                   detail,
 	}
 }
 
