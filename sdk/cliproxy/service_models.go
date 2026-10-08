@@ -909,6 +909,9 @@ func applyOAuthModelAliasForAuth(cfg *config.Config, provider, authKind string, 
 		return models
 	}
 	aliases := oauthModelAliasesForAuth(cfg, channel, attributes)
+	if channel == "xai" {
+		aliases = withXAIImplicitModelAliases(aliases, models)
+	}
 	if len(aliases) == 0 {
 		return models
 	}
