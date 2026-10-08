@@ -152,3 +152,13 @@ Branch `feat/served-model-observability` on top of `upgrade/v8.0.20-selective` (
 Mock traffic only: no live provider responses were observed, so the extraction rules are verified against upstream fixtures, not current provider output. Linux and Windows binaries were not run.
 
 An independent read-only review of the branch found no critical issue and one important one: the summary flagged every mapped Kimi request as substituted. The fix records the reporter's substitution decision on the usage record. `TestKimiServedModelSummaryJudgesSubstitutionAgainstMappedModel` failed before the fix and passes after it. `TestUsageReporterResponseModelSubstituted` and the new Codex executor-level `TestCodexExecutorUsageRecordCarriesServedModel` were each confirmed by mutation. After the fixes, the full suite passed again (88 packages with tests), the race runs above passed again including five repeated runs, the three builds passed, and the Linux amd64 SHA-256 is `51fbb492d71d4400686a806abc6b64d1e137e07efe4f64f4cfc6bbc9fa64fd90`.
+
+## Release review fixes (2026-10-08)
+
+Release delta 33c4ff39..HEAD, reviewed by Codex (gpt-6-astra, high effort) in three passes: "Deploy: no", "no", then "yes" after the fixes recorded in `UPSTREAM_PATCHES.md`. Each fix has a test that failed before it. Executed on macOS arm64 with Go 1.27.1:
+
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed: 88 packages with tests.
+- `CGO_ENABLED=1 go test -race -count=1` passed for sdk/cliproxy/auth, sdk/cliproxy, internal/runtime/executor/..., internal/translator/codex/..., internal/servedmodel, internal/api/handlers/management, internal/redisqueue and sdk/cliproxy/usage. The refresh, Antigravity stream, proxy reload and citation tests passed five repeated race runs.
+- gofmt reported no changes in modified Go files, and `git diff --check` passed.
+
+`TestClaudeExecutorSharedCredentialMetadataMixedAccess` reports a data race in `ClaudeExecutor.PrepareRequestAuth` (shared credential metadata map) under `-race`. It reproduces on the deployed baseline 33c4ff39 and the files are unchanged in this release. Claude accounts are not configured in production. The race runs above skip it, and it remains a follow-up.

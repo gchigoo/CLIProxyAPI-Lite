@@ -564,3 +564,18 @@ The tests deferred from a3b77566 and c7b4d573 in the v8.0.20 update are restored
 In Lite, c7b4d573's source change is behavior-neutral: payload overrides are already applied before `cacheHelper`, so the restored test guards the recorded effort rather than a changed path.
 
 The final review found that the summary judged substitution against `Record.Model`, which for Kimi is the client model while a mapped model is sent upstream; every mapped Kimi request appeared substituted although the warning stayed silent. The reporter now computes the substitution once with the warning's rule (expected upstream model first) and records it as the Lite field `Record.ResponseModelSubstituted`, which the summary mirrors. Codex Execute and ExecuteStream gained executor-level served-model assertions.
+
+## Release review fixes (2026-10-08)
+
+Before deployment, Codex (gpt-6-astra, high effort) reviewed the release delta 33c4ff39..a848939e, which was then running in production, and returned "Deploy: no". Each finding below was traced in code and fixed in a Lite commit with a test that failed first:
+
+- An Antigravity multi-line payload could grow without bound, and a complete JSON object on one `data:` line inside a multi-line event discarded the event's pending payload. Pending payloads are now resynchronized only at the SSE event boundary (a blank line), bounded at 1 MiB (502 beyond it), and validated only on lines that close a JSON value.
+- A refresh that failed with `invalid_grant` after a same-epoch update could mark the new credential terminally unauthorized. The refresh failure path now applies the CredentialVersion guard that 935aa6e3 added to the success path.
+- The Grok CLI version updater captured the global proxy once at startup. Config reloads now update it; each lookup still uses the fail-closed proxy client.
+- The Codex re-review found that boundary resynchronization discarded the evidence of a malformed event, so a clean EOF afterwards completed successfully. A dropped payload now fails the stream with a 502 at EOF unless a terminal frame followed it, and the 1 MiB bound also covers a payload's first fragment.
+- A third pass found that terminal delivery could come from the replay accumulator, which observes raw lines including malformed events, so a later non-terminal frame skipped the truncation error. Terminal delivery now comes only from a validated, forwarded payload.
+- Streamed Codex chat citations (16d98881) were offset by all emitted text, even when the annotation arrived after its own part's text. Each content part now records its starting offset for annotation events and finished message items.
+
+Ruling: after a token rotation, a late account-level 429 from the old credential version is still dropped as a stale result (6920ed5d, upstream #6416). Before output is streamed, the conductor fails over to another credential within the same request. Later or concurrent requests can still pick the exhausted credential until a current-version failure sets its cooldown, and an error after streamed output reaches the client. This is the upstream-intended tradeoff and is kept.
+
+After these fixes Codex returned "Deploy: yes" for a848939e through the final release commit.
