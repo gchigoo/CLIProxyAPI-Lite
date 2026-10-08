@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,5 +243,79 @@ func TestAntigravityStreamPendingPayloadLimitEndsStream(t *testing.T) {
 	statusError, ok := streamErr.(interface{ StatusCode() int })
 	if !ok || statusError.StatusCode() != http.StatusBadGateway {
 		t.Fatalf("pending payload limit error = %v, want status %d", streamErr, http.StatusBadGateway)
+	}
+}
+
+// A malformed event dropped at its boundary is still evidence of a truncated
+// response: a clean EOF without a later terminal frame must not complete.
+func TestAntigravityStreamDroppedMalformedEventBeforeEOFReportsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"response":{"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"modelVersion":"gemini-3.7-flash"}}
+
+data: {"error":{"code":503,
+
+`)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var streamErr error
+	for chunk := range executeAntigravityTestStream(t, ctx, "antigravity-dropped-malformed-eof-test", server.URL, sdktranslator.FormatOpenAI,
+		`{"model":"gemini-3.7-flash","stream":true,"messages":[{"role":"user","content":"hello"}]}`) {
+		if chunk.Err != nil {
+			streamErr = chunk.Err
+			continue
+		}
+		if bytes.Contains(chunk.Payload, []byte(`"finish_reason":"stop"`)) {
+			t.Fatalf("truncated stream became a successful completion: %s", chunk.Payload)
+		}
+	}
+	statusError, ok := streamErr.(interface{ StatusCode() int })
+	if !ok || statusError.StatusCode() != http.StatusBadGateway {
+		t.Fatalf("dropped malformed event error = %v, want status %d", streamErr, http.StatusBadGateway)
+	}
+}
+
+// The multi-line bound also applies to the first fragment of a payload.
+func TestAntigravityStreamPendingPayloadLimitCoversFirstFragment(t *testing.T) {
+	previous := antigravityMaxPendingJSONBytes
+	antigravityMaxPendingJSONBytes = 256
+	t.Cleanup(func() { antigravityMaxPendingJSONBytes = previous })
+
+	upstreamClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"x\":\""+strings.Repeat("a", 400)+"\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+		case <-upstreamClosed:
+		}
+	}))
+	defer func() {
+		close(upstreamClosed)
+		server.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var streamErr error
+	for chunk := range executeAntigravityTestStream(t, ctx, "antigravity-first-fragment-limit-test", server.URL, sdktranslator.FormatOpenAI,
+		`{"model":"gemini-3.7-flash","stream":true,"messages":[{"role":"user","content":"hello"}]}`) {
+		if chunk.Err != nil {
+			streamErr = chunk.Err
+			break
+		}
+	}
+	if ctx.Err() != nil {
+		t.Fatal("stream did not end before the test deadline; the oversized first fragment was kept")
+	}
+	statusError, ok := streamErr.(interface{ StatusCode() int })
+	if !ok || statusError.StatusCode() != http.StatusBadGateway {
+		t.Fatalf("first fragment limit error = %v, want status %d", streamErr, http.StatusBadGateway)
 	}
 }

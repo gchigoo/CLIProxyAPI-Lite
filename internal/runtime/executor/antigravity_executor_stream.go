@@ -204,6 +204,18 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		scanner.Buffer(nil, streamScannerBuffer)
 		claudeInputTokens := helps.NewClaudeInputTokenState(from, to, responseFormat, originalPayload)
 		var pendingJSON []byte
+		// malformedDropped records a payload discarded at its event boundary; without
+		// a later terminal frame the response is truncated, not complete.
+		var malformedDropped bool
+		failPendingLimit := func() {
+			errPending := statusErr{code: http.StatusBadGateway, msg: "antigravity stream payload exceeded the multi-line size limit without becoming valid JSON"}
+			helps.RecordAPIResponseError(ctx, e.cfg, errPending)
+			reporter.PublishFailure(ctx, errPending)
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Err: errPending}:
+			case <-ctx.Done():
+			}
+		}
 		var terminalDelivered bool
 		var replayCommitted bool
 		commitReplay := func() {
@@ -239,6 +251,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					// A blank line ends the SSE event; a payload still invalid here can never complete.
 					log.Warnf("antigravity executor: dropping incomplete stream payload (%d bytes)", len(pendingJSON))
 					pendingJSON = nil
+					malformedDropped = true
 					continue
 				}
 				if bytes.HasPrefix(trimmedLine, []byte("data:")) {
@@ -249,13 +262,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					pendingJSON = append(pendingJSON, trimmedLine...)
 				}
 				if len(pendingJSON) > antigravityMaxPendingJSONBytes {
-					errPending := statusErr{code: http.StatusBadGateway, msg: "antigravity stream payload exceeded the multi-line size limit without becoming valid JSON"}
-					helps.RecordAPIResponseError(ctx, e.cfg, errPending)
-					reporter.PublishFailure(ctx, errPending)
-					select {
-					case out <- cliproxyexecutor.StreamChunk{Err: errPending}:
-					case <-ctx.Done():
-					}
+					failPendingLimit()
 					return
 				}
 				// A JSON payload can only become valid on a line that closes it.
@@ -265,6 +272,10 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 				payload = pendingJSON
 				pendingJSON = nil
 			} else if payload != nil && !gjson.ValidBytes(payload) {
+				if len(payload) > antigravityMaxPendingJSONBytes {
+					failPendingLimit()
+					return
+				}
 				pendingJSON = append([]byte(nil), payload...)
 				continue
 			}
@@ -316,7 +327,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
 			case <-ctx.Done():
 			}
-		} else if len(pendingJSON) > 0 && !terminalDelivered {
+		} else if (len(pendingJSON) > 0 || malformedDropped) && !terminalDelivered {
 			errIncomplete := statusErr{code: http.StatusBadGateway, msg: "antigravity stream ended with an incomplete JSON payload"}
 			helps.RecordAPIResponseError(ctx, e.cfg, errIncomplete)
 			reporter.PublishFailure(ctx, errIncomplete)
