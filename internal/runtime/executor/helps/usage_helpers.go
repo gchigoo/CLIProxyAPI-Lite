@@ -271,6 +271,9 @@ func (r *UsageReporter) ResponseModelSubstituted() bool {
 	if served == "" || !IsModelSubstituted(expectedModel, served) {
 		return false
 	}
+	if isKnownServedModelEquivalent(expectedModel, served) || isKnownServedModelEquivalent(r.model, served) {
+		return false
+	}
 	return r.model == "" || IsModelSubstituted(r.model, served)
 }
 

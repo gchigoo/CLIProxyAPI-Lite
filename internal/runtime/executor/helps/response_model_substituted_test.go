@@ -20,6 +20,10 @@ func TestUsageReporterResponseModelSubstituted(t *testing.T) {
 		{name: "mapped upstream model", model: "kimi-k2.7-code", upstream: "kimi-for-coding", served: "kimi-for-coding", want: false},
 		{name: "substituted model", model: "gpt-5.6-sol", served: "gpt-5.5-mini", want: true},
 		{name: "mapped model substituted", model: "kimi-k2.7-code", upstream: "kimi-for-coding", served: "unexpected-model-v2", want: true},
+		{name: "known equivalent served model", model: "grok-4.7", served: "grok-4.7-build", want: false},
+		{name: "known equivalent with case and prefix", model: "xai/grok-4.7", served: "GROK-4.7-Build", want: false},
+		{name: "known equivalent only for its requested model", model: "grok-4.6", served: "grok-4.7-build", want: true},
+		{name: "unknown served model for allowlisted request", model: "grok-4.7", served: "grok-4.7-mini", want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,5 +53,17 @@ func TestUsageReporterResponseModelSubstitutedFalseWithoutServedModel(t *testing
 	var nilReporter *UsageReporter
 	if nilReporter.ResponseModelSubstituted() {
 		t.Fatal("nil reporter reported a substitution")
+	}
+}
+
+func TestUsageReporterDoesNotWarnForKnownEquivalentServedModel(t *testing.T) {
+	hook := setupResponseModelLoggerHook(t)
+	ctx := context.Background()
+	reporter := newCodexTestReporter(ctx, "grok-4.7", nil)
+	reporter.SetResponseModel("grok-4.7-build")
+	reporter.Publish(ctx, usage.Detail{TotalTokens: 3})
+
+	if warnings := substitutionWarnings(hook); len(warnings) != 0 {
+		t.Fatalf("expected no substitution warning for a known equivalent, got %#v", warnings)
 	}
 }
