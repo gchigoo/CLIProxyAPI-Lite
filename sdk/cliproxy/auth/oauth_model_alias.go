@@ -268,7 +268,13 @@ func (m *Manager) resolveOAuthModelAliasWithResult(auth *Auth, requestedModel st
 	if result := resolveUpstreamModelFromAliases(OAuthModelAliasesFromAttributes(authAttributes(auth)), requestedModel); result.UpstreamModel != "" {
 		return result
 	}
-	return resolveUpstreamModelFromAliasTable(m, auth, requestedModel, channel)
+	if result := resolveUpstreamModelFromAliasTable(m, auth, requestedModel, channel); result.UpstreamModel != "" {
+		return result
+	}
+	if channel == xaiModelAliasChannel {
+		return resolveXAIImplicitModelAlias(requestedModel)
+	}
+	return OAuthModelAliasResult{}
 }
 
 func authAttributes(auth *Auth) map[string]string {
