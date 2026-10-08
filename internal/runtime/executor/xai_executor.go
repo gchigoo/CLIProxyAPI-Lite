@@ -87,6 +87,11 @@ func StartXAIVersionUpdater(ctx context.Context, proxyURL string) {
 	helps.StartXAIVersionUpdater(ctx, proxyURL)
 }
 
+// SetXAIVersionProxyURL applies a reloaded global proxy to the Grok CLI version updater.
+func SetXAIVersionProxyURL(proxyURL string) {
+	helps.SetXAIVersionProxyURL(proxyURL)
+}
+
 // Identifier returns the provider identifier.
 func (e *XAIExecutor) Identifier() string {
 	return "xai"

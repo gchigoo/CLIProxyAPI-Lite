@@ -70,6 +70,21 @@ func StartXAIVersionUpdater(ctx context.Context, proxyURL string) {
 	go runXAIVersionUpdater(runCtx)
 }
 
+// SetXAIVersionProxyURL updates the proxy used by later npm registry lookups, so a
+// configuration reload takes effect without restarting the updater.
+func SetXAIVersionProxyURL(proxyURL string) {
+	xaiClientVersionMu.Lock()
+	xaiVersionProxyURL = strings.TrimSpace(proxyURL)
+	xaiClientVersionMu.Unlock()
+}
+
+// XAIVersionProxyURL returns the proxy used by npm registry lookups.
+func XAIVersionProxyURL() string {
+	xaiClientVersionMu.RLock()
+	defer xaiClientVersionMu.RUnlock()
+	return xaiVersionProxyURL
+}
+
 func runXAIVersionUpdater(ctx context.Context) {
 	refreshXAIClientVersion(ctx)
 
