@@ -499,7 +499,7 @@ Coupled groups kept out of this update: the apply_patch bridge (3ebee065, d306f2
 | 4e4dede4811ab99c6ce20bdea3e45041e6304b29 | fix(antigravity): surface backend errors and support multi-line stream payloads | adapted | Antigravity streams join multi-line SSE JSON and surface in-stream backend error frames as real errors. Lite has no stream-delivery tracking, so the failure is published through the usage reporter. |
 | 16d98881d4bb37adaa827599e4be8f5154e81646 | feat(codex): preserve URL citations in OpenAI response translation | included | Codex Chat Completions translation preserves URL citations. |
 | 97dd9eec628c6b1e89847f31bb10c1da49b0402a | fix(openai): report error on truncated stream missing finish_reason | included | OpenAI Chat Completions handler reports truncated streams missing finish_reason. |
-| a4acc9f752bd46571f737a10c04bf413656ab06b | fix(antigravity): treat client disconnect after terminal stream chunk as success | adapted | A client disconnect after a delivered Antigravity terminal frame commits reasoning replay and is not reported as a stream error. Usage was already published with the terminal frame. The stream-delivery test is omitted. |
+| a4acc9f752bd46571f737a10c04bf413656ab06b | fix(antigravity): treat client disconnect after terminal stream chunk as success | adapted | A client disconnect after a delivered Antigravity terminal frame commits reasoning replay and records the turn as completed (see the review fixes below for split usage frames). The stream-delivery test is omitted. |
 | 68afd0d1b47bc274f475c7cb7bae2cb548a35bba | feat(codex): support action sources in Claude web search translation | deferred | Codex-to-Claude web search translation; no Claude-format client traffic. |
 | 611ebba415902fdc1c07d567168ba7d96bea1607 | refactor(executor): unify model reporting and replay logs | deferred | Response-model reporting refactor; its prerequisites (25f40d8c chain) are adopted in the separate response-model feature work. The Antigravity replay log part depends on the deferred replay tracker (c7f358d4). |
 | 17dc1b81c248a10a5aa4db4f2268d723607a87a5 | feat(antigravity): enhance context hash rejection logging and introduce replay phases | deferred | Depends on the deferred Antigravity replay tracker (c7f358d4). |
@@ -535,3 +535,12 @@ Coupled groups kept out of this update: the apply_patch bridge (3ebee065, d306f2
 | f51624aa35c1c5fdf21e4307ddb3140af3e86525 | fix(translator): report unsendable user turn attachments in openai responses to interactions | deferred | Interactions attachment reporting; follows deferred 3b69068e. |
 | 34e73c75a3a4f9d6b5d7c2c98c44fdffcc060ec9 | fix(xai): add proxy support and semver validation to Grok CLI updater | deferred | Follow-up to deferred 90654da5. |
 | 0f96f568e4dbf6f84ad7399a74b78344c5eac7e6 | refactor(translator): update openai and interactions request converters to return errors | deferred | Translator error-return refactor (140 files) following deferred 3b69068e and f51624aa. |
+
+### Review fixes
+
+The independent review of the final branch confirmed two Antigravity stream issues, fixed in a Lite commit with regression tests:
+
+- After a delivered terminal frame, a disconnect before the separate usage frame (the split shape `FilterSSEUsageMetadata` expects) published no usage record. The deferred settlement now calls `EnsurePublished`. A cancelled stream that ends cleanly before any terminal frame publishes a failure, and the synthetic completion still requires an uncancelled clean end.
+- A frame that never became valid JSON swallowed every later frame, and the leftover was dropped at EOF before a synthetic successful completion. A complete `data:` JSON frame now discards the pending payload, and an incomplete payload at EOF before any terminal frame is a 502 stream error. Both upstream 4e4dede4 behaviors remain: multi-line raw JSON bodies are joined and in-stream error objects are surfaced.
+
+Noted by the review and left unchanged: with 6920ed5d, a long stream that spans a credential refresh loses its final result (including a 429 cooldown and its Redis error event), as upstream intends. A failed refresh that races with a same-epoch credential update can still mark the new credential terminal unauthorized, because only the refresh success path checks `CredentialVersion`; this predates the update.

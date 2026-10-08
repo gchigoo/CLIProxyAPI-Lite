@@ -213,9 +213,11 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			}
 		}
 		defer func() {
-			// A client that disconnects after the terminal chunk still completed the turn.
+			// A client that disconnects after the terminal chunk still completed the turn,
+			// even when the split usage frame never arrived.
 			if terminalDelivered {
 				commitReplay()
+				reporter.EnsurePublished(ctx)
 			}
 		}()
 		var param any
@@ -231,6 +233,11 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			line = helps.FilterSSEUsageMetadata(line)
 
 			payload := helps.JSONPayload(line)
+			if len(pendingJSON) > 0 && antigravityStreamLineStartsEvent(line, payload) {
+				// A complete data frame starts a new event; the pending payload can never complete.
+				log.Warnf("antigravity executor: dropping incomplete stream payload (%d bytes)", len(pendingJSON))
+				pendingJSON = nil
+			}
 			if len(pendingJSON) > 0 {
 				trimmedLine := bytes.TrimSpace(line)
 				if bytes.HasPrefix(trimmedLine, []byte("data:")) {
@@ -287,7 +294,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			if terminalDelivered && errors.Is(errScan, context.Canceled) && ctx.Err() != nil {
-				// Usage was published with the terminal chunk; the disconnect is not a failure.
+				// The deferred settlement records the delivered turn; the disconnect is not a failure.
 				return
 			}
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
@@ -296,7 +303,19 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
 			case <-ctx.Done():
 			}
-		} else if ctx.Err() == nil {
+		} else if len(pendingJSON) > 0 && !terminalDelivered {
+			errIncomplete := statusErr{code: http.StatusBadGateway, msg: "antigravity stream ended with an incomplete JSON payload"}
+			helps.RecordAPIResponseError(ctx, e.cfg, errIncomplete)
+			reporter.PublishFailure(ctx, errIncomplete)
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Err: errIncomplete}:
+			case <-ctx.Done():
+			}
+		} else if ctx.Err() != nil {
+			if !terminalDelivered {
+				reporter.PublishFailure(ctx, ctx.Err())
+			}
+		} else {
 			// Only a clean end of stream may produce a synthetic terminal event.
 			// Translating [DONE] after a read error would report a truncated
 			// stream as a successful completion.
@@ -313,6 +332,16 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		}
 	}(httpResp)
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
+}
+
+// antigravityStreamLineStartsEvent reports whether a line is a complete SSE data frame,
+// which cannot continue a pending multi-line payload.
+func antigravityStreamLineStartsEvent(line, payload []byte) bool {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, []byte("data:")) || len(payload) == 0 || payload[0] != '{' {
+		return false
+	}
+	return gjson.ValidBytes(payload)
 }
 
 // antigravityStreamPayloadHasFinishReason reports whether an upstream frame ends the response.

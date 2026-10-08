@@ -135,3 +135,5 @@ Executed on macOS arm64 with Go 1.27.1:
 - gofmt reported no changes in modified Go files; `git diff --check` passed; Linux amd64, macOS arm64 and Windows amd64 builds with `-trimpath -ldflags="-s -w"` passed. Linux amd64 SHA-256: `4db49fae92814623a9522f44c111482c970f9fc64b7de77f92ce11a7c358ef16`.
 
 No live provider requests were made and the Linux and Windows binaries were not run. `claude_thinking_replay_test.go` and `codex_stream_bootstrap_buffering_test.go` are not gofmt-clean on the baseline either and were left unchanged.
+
+An independent read-only review followed these checks. Its two confirmed Antigravity stream findings were fixed with tests that failed before the fix (`TestAntigravityStreamDisconnectBeforeSplitUsagePublishesRecord`, `TestAntigravityStreamMalformedFrameDoesNotSwallowLaterFrames`, `TestAntigravityStreamIncompletePayloadAtEOFReportsError`). The executor package then passed, the Antigravity stream tests passed three repeated race runs, and the full suite was rerun.
