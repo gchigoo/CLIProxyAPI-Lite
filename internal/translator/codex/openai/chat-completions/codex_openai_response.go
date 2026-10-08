@@ -32,15 +32,18 @@ type toolCallStreamState struct {
 
 // ConvertCliToOpenAIParams holds parameters for response conversion.
 type ConvertCliToOpenAIParams struct {
-	ServiceTier           string
-	ResponseID            string
-	CreatedAt             int64
-	Model                 string
-	FunctionCallIndex     int
-	toolCallStates        map[string]*toolCallStreamState
-	currentToolCall       *toolCallStreamState
-	citationKeys          map[string]struct{}
-	emittedTextRunes      int64
+	ServiceTier       string
+	ResponseID        string
+	CreatedAt         int64
+	Model             string
+	FunctionCallIndex int
+	toolCallStates    map[string]*toolCallStreamState
+	currentToolCall   *toolCallStreamState
+	citationKeys      map[string]struct{}
+	emittedTextRunes  int64
+	// textPartStarts maps "output_index:content_index" to the rune offset where
+	// that content part began, so its annotations stay part-relative.
+	textPartStarts        map[string]int64
 	LastImageHashByItemID map[string][32]byte
 }
 
@@ -151,10 +154,12 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 			delta := deltaResult.String()
 			template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
 			template, _ = sjson.SetBytes(template, "choices.0.delta.content", delta)
+			p.textPartOffset(rootResult.Get("output_index").String(), rootResult.Get("content_index"))
 			p.emittedTextRunes += int64(utf8.RuneCountInString(delta))
 		}
 	} else if dataType == "response.output_text.annotation.added" || dataType == "response.output_text.done" || dataType == "response.content_part.done" {
-		citations := buildCodexURLCitations(codexAnnotationsFromEvent(rootResult), p.emittedTextRunes, p.citationKeys)
+		offset := p.textPartOffset(rootResult.Get("output_index").String(), rootResult.Get("content_index"))
+		citations := buildCodexURLCitations(codexAnnotationsFromEvent(rootResult), offset, p.citationKeys)
 		if len(citations) == 0 {
 			return [][]byte{}
 		}
@@ -286,7 +291,7 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 			return [][]byte{}
 		}
 		if itemResult.Get("type").String() == "message" {
-			citations := buildCodexURLCitations(codexAnnotationsFromEvent(rootResult), p.emittedTextRunes, p.citationKeys)
+			citations := p.messageItemCitations(rootResult)
 			if len(citations) == 0 {
 				return [][]byte{}
 			}
@@ -623,6 +628,40 @@ func codexAnnotationResults(value gjson.Result) []gjson.Result {
 		return results
 	}
 	return []gjson.Result{value}
+}
+
+// textPartOffset returns the rune offset where a content part began, recording
+// the current offset the first time the part is seen. Without a content index
+// the cumulative offset is kept.
+func (p *ConvertCliToOpenAIParams) textPartOffset(outputIndex string, contentIndex gjson.Result) int64 {
+	if !contentIndex.Exists() {
+		return p.emittedTextRunes
+	}
+	key := outputIndex + ":" + contentIndex.String()
+	if start, ok := p.textPartStarts[key]; ok {
+		return start
+	}
+	if p.textPartStarts == nil {
+		p.textPartStarts = make(map[string]int64)
+	}
+	p.textPartStarts[key] = p.emittedTextRunes
+	return p.emittedTextRunes
+}
+
+// messageItemCitations converts a finished message item's annotations, offsetting
+// each content part by the position where its streamed text began.
+func (p *ConvertCliToOpenAIParams) messageItemCitations(event gjson.Result) [][]byte {
+	item := event.Get("item")
+	citations := buildCodexURLCitations(codexAnnotationResults(item.Get("annotations")), p.emittedTextRunes, p.citationKeys)
+	outputIndex := event.Get("output_index").String()
+	for index, part := range item.Get("content").Array() {
+		offset := p.emittedTextRunes
+		if start, ok := p.textPartStarts[outputIndex+":"+strconv.Itoa(index)]; ok {
+			offset = start
+		}
+		citations = append(citations, buildCodexURLCitations(codexAnnotationResults(part.Get("annotations")), offset, p.citationKeys)...)
+	}
+	return citations
 }
 
 func codexAnnotationsFromEvent(event gjson.Result) []gjson.Result {
