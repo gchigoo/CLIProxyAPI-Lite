@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -40,11 +42,18 @@ func listAuthFileEntries(t *testing.T, manager *coreauth.Manager) map[string]map
 	return entries
 }
 
+// servedModelsTestRun keeps auth IDs unique per run: the default tracker is
+// process-wide, so repeated runs (-count>1) must not share its entries.
+var servedModelsTestRun atomic.Int64
+
 func TestListAuthFiles_IncludesServedModelsWhenObserved(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 
+	run := strconv.FormatInt(servedModelsTestRun.Add(1), 10)
+	observedID := "served-models-observed-" + run
+	unobservedID := "served-models-unobserved-" + run
 	manager := coreauth.NewManager(nil, nil, nil)
-	for _, id := range []string{"served-models-observed", "served-models-unobserved"} {
+	for _, id := range []string{observedID, unobservedID} {
 		record := &coreauth.Auth{
 			ID:         id,
 			Provider:   "codex",
@@ -58,17 +67,17 @@ func TestListAuthFiles_IncludesServedModelsWhenObserved(t *testing.T) {
 
 	ctx := context.Background()
 	tracker := servedmodel.Default()
-	tracker.HandleUsage(ctx, coreusage.Record{AuthID: "served-models-observed", Model: "gpt-5.6-sol", ResponseModel: "gpt-5.6-sol"})
-	tracker.HandleUsage(ctx, coreusage.Record{AuthID: "served-models-observed", Model: "gpt-5.6-sol", ResponseModel: "gpt-5.5-mini"})
+	tracker.HandleUsage(ctx, coreusage.Record{AuthID: observedID, Model: "gpt-5.6-sol", ResponseModel: "gpt-5.6-sol"})
+	tracker.HandleUsage(ctx, coreusage.Record{AuthID: observedID, Model: "gpt-5.6-sol", ResponseModel: "gpt-5.5-mini"})
 
 	entries := listAuthFileEntries(t, manager)
 
-	if _, ok := entries["served-models-unobserved"]["served_models"]; ok {
-		t.Fatalf("served_models must be absent without observations: %#v", entries["served-models-unobserved"])
+	if _, ok := entries[unobservedID]["served_models"]; ok {
+		t.Fatalf("served_models must be absent without observations: %#v", entries[unobservedID])
 	}
-	raw, ok := entries["served-models-observed"]["served_models"].([]any)
+	raw, ok := entries[observedID]["served_models"].([]any)
 	if !ok || len(raw) != 2 {
-		t.Fatalf("served_models = %#v, want two entries", entries["served-models-observed"]["served_models"])
+		t.Fatalf("served_models = %#v, want two entries", entries[observedID]["served_models"])
 	}
 	latest, ok := raw[0].(map[string]any)
 	if !ok {
