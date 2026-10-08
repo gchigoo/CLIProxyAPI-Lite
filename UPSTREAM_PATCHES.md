@@ -544,3 +544,21 @@ The independent review of the final branch confirmed two Antigravity stream issu
 - A frame that never became valid JSON swallowed every later frame, and the leftover was dropped at EOF before a synthetic successful completion. A complete `data:` JSON frame now discards the pending payload, and an incomplete payload at EOF before any terminal frame is a 502 stream error. Both upstream 4e4dede4 behaviors remain: multi-line raw JSON bodies are joined and in-stream error objects are surfaced.
 
 Noted by the review and left unchanged: with 6920ed5d, a long stream that spans a credential refresh loses its final result (including a 429 cooldown and its Redis error event), as upstream intends. A failed refresh that races with a same-epoch credential update can still mark the new credential terminal unauthorized, because only the refresh success path checks `CredentialVersion`; this predates the update.
+
+## Response-model observability (2026-10-08)
+
+Baseline: 0042b881 (`upgrade/v8.0.20-selective`). These commits were deferred in earlier reviews and are adopted for served-model observability. Devin, Meta and plugin parts stay excluded.
+
+| Upstream SHA | Change | Decision | Rationale |
+|---|---|---|---|
+| 25f40d8cf8dfa8765e45873060cf41056cd1b112 | feat(codex): record upstream response model and warn on silent model substitution | included | `Record.ResponseModel`, queue `response_model`, Codex observation and substitution warning. |
+| e9463ff5a79537b22971d101c4e9f49797fe682c | feat(executor): extend response model recording and substitution warnings to all providers | adapted | Devin/Meta executors excluded; the Antigravity stream observation follows Lite's in-stream error-frame check. |
+| f8467f07dca55b130ddd69278d37f5844d23de28 | fix(executor): record authentic Devin and Gemini Interactions response models | adapted | Gemini Interactions part only; Devin code and tests excluded. |
+| cde7d57e44e6c52fd59d532b35c9a33886d99823 | fix(executor): robust response model observability across meta, kimi, and openai-compat streams | adapted | Meta parts excluded; Kimi mapped-model test uses Lite's kimi-k2.7-code mapping (K2.8 deferred). |
+| e84e248c51e549d881973175071bc0e21ec43aa1 | fix(executor): record expected Devin upstream model and bound stream observer memory | adapted | Stream observer memory bound only. |
+| 611ebba415902fdc1c07d567168ba7d96bea1607 | refactor(executor): unify model reporting and replay logs | adapted | Response-model part only; the Antigravity replay log part still depends on the deferred replay tracker (c7f358d4). |
+| ac3849e5d981e85dd3f713aae0691d23d7b3a56c | feat(pluginapi): propagate response model, service tier, and stream flag to usage plugins | excluded | Dynamic plugin API is removed. |
+
+The tests deferred from a3b77566 and c7b4d573 in the v8.0.20 update are restored. Lite adds `internal/servedmodel` (a bounded per-credential summary fed by the usage pipeline) and the `served_models` field in `GET /v0/management/auth-files`.
+
+In Lite, c7b4d573's source change is behavior-neutral: payload overrides are already applied before `cacheHelper`, so the restored test guards the recorded effort rather than a changed path.

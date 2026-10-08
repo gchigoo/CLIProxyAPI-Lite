@@ -139,3 +139,14 @@ No live provider requests were made and the Linux and Windows binaries were not 
 An independent read-only review followed these checks. Its two confirmed Antigravity stream findings were fixed with tests that failed before the fix (`TestAntigravityStreamDisconnectBeforeSplitUsagePublishesRecord`, `TestAntigravityStreamMalformedFrameDoesNotSwallowLaterFrames`, `TestAntigravityStreamIncompletePayloadAtEOFReportsError`). The executor package then passed, the Antigravity stream tests passed three repeated race runs, and the full suite was rerun.
 
 The Grok npm version updater (90654da5, 34e73c75) was added afterwards. Its upstream tests and the Lite fail-closed proxy test passed. The xAI executor and updater tests passed under `-race`, and the client-version, updater and chat-proxy header tests passed five repeated race runs. `TestXAIWebsocketsExecuteStreamSendsResponseCreateWithPreviousResponseID` fails on its second run and hangs on its third when repeated with `-count>1` in one process. This also happens on the v8.0.8 baseline, so it is a pre-existing test isolation issue; the test passes in single runs.
+
+## Served-model observability (2026-10-08)
+
+Branch `feat/served-model-observability` on top of `upgrade/v8.0.20-selective` (0042b881). Executed on macOS arm64 with Go 1.27.1:
+
+- Each upstream pick ran its affected package tests. The Lite Antigravity response-model tests failed before e9463ff5 and passed after it. The tracker and `served_models` tests failed before their implementation. The two restored Codex usage tests were verified by mutation: recording reasoning effort from the original request, or publishing image tool usage before main usage, makes them fail.
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed: 88 packages with tests.
+- `CGO_ENABLED=1 go test -race -count=1` passed for internal/servedmodel, internal/runtime/executor/..., internal/redisqueue, sdk/cliproxy/usage and internal/api/handlers/management. The response-model, substitution, tracker and `served_models` tests also passed five repeated race runs, after the listing test was changed to use per-run auth IDs against the process-wide tracker.
+- gofmt reported no changes in modified Go files; `git diff --check` passed; Linux amd64, macOS arm64 and Windows amd64 builds with `-trimpath -ldflags="-s -w"` passed. Linux amd64 SHA-256: `3fbb4e04045cdab4f8345618bdf519fc0b7c023a132d6a9773578376369ae8d4`.
+
+Mock traffic only: no live provider responses were observed, so the extraction rules are verified against upstream fixtures, not current provider output. Linux and Windows binaries were not run.
