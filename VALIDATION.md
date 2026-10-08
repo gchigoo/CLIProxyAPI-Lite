@@ -166,3 +166,17 @@ Release delta 33c4ff39..HEAD, reviewed by Codex (gpt-6-astra, high effort) in th
 ## Known equivalent served models (2026-10-08)
 
 After deployment, xAI logged "served grok-4.7-build for requested grok-4.7" for every request, the same served name the 2026-10-02 baseline probes recorded. `helps/response_model_equivalents.go` now lists grok-4.7 → grok-4.7-build as a known equivalent, so neither the warning nor `served_models` treats it as a substitution. The two new not-a-substitution cases in `TestUsageReporterResponseModelSubstituted` and `TestUsageReporterDoesNotWarnForKnownEquivalentServedModel` failed before the change; the two control cases pass either way. An independent read-only Claude (opus) review replaced Codex for this change because the Codex quota was exhausted, and found no critical or important issue. Unrelated requests and other served names still count as substitutions. `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed with 88 packages, and the response-model and tracker tests passed three repeated race runs.
+
+## Implicit xAI aliases (2026-10-08)
+
+Branch `feature/subagent-model-refresh` on top of `personal/main` (56a8c494). Executed on macOS arm64 with Go 1.27.1:
+
+- `TestUsageReporterResponseModelSubstituted` gained four Grok build cases. The two not-a-substitution cases (`grok-4.8` served as `grok-4.8-build`, and `cpa-x48` with upstream `grok-4.8`) failed against the single-entry table and pass with the `grok-X.Y` → `grok-X.Y-build` rule. The `-build-fast` and other-version controls pass either way.
+- `TestApplyOAuthModelAlias_XAIImplicitAlias` failed while the alias name function existed but request resolution was not hooked, and passes after it.
+- `TestApplyOAuthModelAlias_XAIImplicitAliases`, `TestApplyOAuthModelAlias_XAIConfiguredForkKeepsDisplayName` and `TestApplyOAuthModelAlias_XAIConfiguredRenameOwnsModel` failed before the listing change.
+- `TestApplyOAuthModelAlias_XAIImplicitAliasesDoNotMutateConfig` and `TestApplyOAuthModelAlias_XAIConfiguredRenameOwnsModel` were confirmed by mutation: appending to the configured slice, or dropping model ownership, makes them fail.
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed: 88 packages with tests. `go vet` on the touched packages and the `-trimpath -ldflags="-s -w"` build passed.
+- `CGO_ENABLED=1 go test -race -count=1` passed for sdk/cliproxy, sdk/cliproxy/auth and internal/runtime/executor/helps.
+- gofmt reported no changes in modified Go files; `git diff --check` passed.
+
+Mock traffic only: the implicit aliases and the build rule are not yet observed against the live xAI catalog or live responses.
