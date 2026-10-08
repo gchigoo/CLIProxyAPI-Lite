@@ -180,3 +180,18 @@ Branch `feature/subagent-model-refresh` on top of `personal/main` (56a8c494). Ex
 - gofmt reported no changes in modified Go files; `git diff --check` passed.
 
 Mock traffic only: the implicit aliases and the build rule are not yet observed against the live xAI catalog or live responses.
+
+## Meta (Muse Code) OAuth provider (2026-10-08)
+
+Branch `feature/meta-provider` on top of `personal/main` (5b2027c7). Executed on macOS arm64 with Go 1.27.1:
+
+- Each upstream pick was built and vetted, and its package tests ran before commit. Two intermediate upstream states failed their own tests until the next pick fixed them, as upstream did (cee799f6, a test race fixed by 47cc31ae; 65348b95, a stale User-Agent expectation fixed by 311efcb3).
+- Lite tests observed failing before their change: `TestMetaExecutorRefreshFailsClosedOnInvalidProxy` (the upstream mint went direct after "parse proxy URL failed"), `TestMetaRetryAfterGatesNotFoundAndModelSupportCooldown` and the upstream `TestMetaExecutor_NotFoundCooldown_Shortened_Issue6117` (12 h instead of 5 m), and, from the final review, `TestMetaPreparePersistFailureReturnsError` and `TestMetaPrepareRemovedDuringMintReturnsError` (nil-pointer panic in the conductor), `TestMetaPrepareKeepsKeyReloadedDuringMint` (obsolete key installed) and `TestMetaExecuteStreamFailsWhenStreamEndsBeforeCompletion` (truncated stream finished cleanly).
+- Confirmed by mutation: `TestMetaExecutorUsageRecordCarriesServedModel` (removing the stream observation fails both stream cases), the credential-level branch of the retry-after gate, and `TestConfigHasNoMetaAPIKeySection` (a temporary `MetaKey` field fails it).
+- `CGO_ENABLED=0 go test -race` passed for sdk/cliproxy/auth and the Meta executor tests.
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed twice after the final review fixes: 89 packages with tests (the new one is internal/auth/meta). One earlier full run crashed in `TestClaudeExecutorPrepareRequestAuthIsRaceFreeOnSharedCredential` with a concurrent map write in `ClaudeExecutor.PrepareRequestAuth`; this is the known shared-metadata race recorded under "Release review fixes". The Claude files are unchanged on this branch, it did not reproduce in 30 isolated runs or under `-race` on either 5b2027c7 or the branch, and a repeated-count stress run behaved identically on both.
+- `go vet` on touched packages, the `-trimpath -ldflags="-s -w"` build (with `-meta-login` in `--help`), gofmt and `git diff --check` passed.
+
+Review: Codex hit its usage limit before reporting, so an independent read-only Claude (opus) review covered the branch. It found one critical issue (a nil auth panic when Meta request preparation fails) and two important ones (a watcher reload during a mint installed the obsolete key; a truncated stream finished cleanly). All three were fixed test-first. Its minor findings are deferred; the pre-existing one is that a refresh or preparation save can recreate an auth file deleted on disk before the watcher removes it.
+
+Mock traffic only: Meta login, minting and requests are not yet observed against the live Meta service.
