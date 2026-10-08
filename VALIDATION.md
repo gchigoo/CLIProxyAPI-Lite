@@ -162,3 +162,7 @@ Release delta 33c4ff39..HEAD, reviewed by Codex (gpt-6-astra, high effort) in th
 - gofmt reported no changes in modified Go files, and `git diff --check` passed.
 
 `TestClaudeExecutorSharedCredentialMetadataMixedAccess` reports a data race in `ClaudeExecutor.PrepareRequestAuth` (shared credential metadata map) under `-race`. It reproduces on the deployed baseline 33c4ff39 and the files are unchanged in this release. Claude accounts are not configured in production. The race runs above skip it, and it remains a follow-up.
+
+## Known equivalent served models (2026-10-08)
+
+After deployment, xAI logged "served grok-4.7-build for requested grok-4.7" for every request, the same served name the 2026-10-02 baseline probes recorded. `helps/response_model_equivalents.go` now lists grok-4.7 → grok-4.7-build as a known equivalent, so neither the warning nor `served_models` treats it as a substitution. `TestUsageReporterResponseModelSubstituted` (the new equivalent cases) and `TestUsageReporterDoesNotWarnForKnownEquivalentServedModel` failed before the change. Unrelated requests and other served names still count as substitutions. `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed with 88 packages, and the response-model and tracker tests passed three repeated race runs.

@@ -12,7 +12,7 @@ The initial personal source was based on upstream v7.2.156. Its 32 customized so
 6. Antigravity retains its provider TLS profile alongside upstream connection-pool limits and lifecycle handling. Gemini and Vertex retain their provider headers.
 7. `codex_exec` and its versioned user-agent form retain Codex multi-agent recognition and agent-message compatibility.
 8. Native model registration, account scheduling, credential updates, reasoning conversion, streaming errors and built-in usage accounting remain functional after dynamic extension removal.
-9. Every executor observes the model the upstream reports before publishing usage. Usage records carry `ResponseModel` and `ResponseModelSubstituted` (judged against the expected upstream model, so mapped models are not substitutions), and silent substitutions are logged by credential index only. `internal/servedmodel` keeps a bounded, non-persistent per-credential summary, and `GET /v0/management/auth-files` exposes it as `served_models`. Updates that touch usage reporting or executors must keep the observation order and this field.
+9. Every executor observes the model the upstream reports before publishing usage. Usage records carry `ResponseModel` and `ResponseModelSubstituted` (judged against the expected upstream model, so mapped models and the known equivalent names in `helps/response_model_equivalents.go` are not substitutions), and silent substitutions are logged by credential index only. `internal/servedmodel` keeps a bounded, non-persistent per-credential summary, and `GET /v0/management/auth-files` exposes it as `served_models`. Updates that touch usage reporting or executors must keep the observation order and this field.
 
 ## Update boundaries
 
