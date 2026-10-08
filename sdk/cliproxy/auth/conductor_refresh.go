@@ -670,6 +670,12 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 				m.mu.Unlock()
 				return nil, err
 			}
+			// A refresh that started from older credentials says nothing about the
+			// credentials installed while it was in flight.
+			if base != nil && (current.CredentialVersion != base.CredentialVersion || CredentialsChanged(base, current)) {
+				m.mu.Unlock()
+				return nil, err
+			}
 			if hasUnauthorizedAuthFailure(current) && !forceRefresh {
 				m.mu.Unlock()
 				return nil, err
