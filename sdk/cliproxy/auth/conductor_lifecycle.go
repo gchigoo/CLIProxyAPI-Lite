@@ -278,6 +278,16 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 		cooldownStateChanged = clearCooldownStateForAuth(auth, now) || cooldownStateChanged
 	}
 	auth.EnsureIndex()
+	// A minted Meta key must reach the configured store before requests can use it.
+	// Keep the epoch check, save and installation together so a concurrent reload
+	// or removal cannot let an obsolete mint overwrite the credential on disk.
+	persistMetaMint := (mode == updateModePrepare || mode == updateModeRefresh) && strings.EqualFold(strings.TrimSpace(auth.Provider), "meta")
+	if persistMetaMint {
+		if errPersist := m.persist(ctx, auth); errPersist != nil {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("persist meta auth: %w", errPersist)
+		}
+	}
 	authClone := auth.Clone()
 	m.auths[auth.ID] = authClone
 	// Snapshot before unlocking: MarkResult mutates the published auth in place.
@@ -295,8 +305,11 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 	m.queueRefreshReschedule(auth.ID)
 	// Persist failures stay non-fatal, but must not be silent: after a token
 	// refresh the rotated credentials only exist in memory until persisted.
-	if errPersist := m.persist(ctx, auth); errPersist != nil {
-		log.WithFields(log.Fields{"auth_id": auth.ID, "credential": auth.ID, "provider": auth.Provider}).Warnf("failed to persist updated auth %s (%s): %v", auth.Provider, auth.ID, errPersist)
+	// A Meta mint was already persisted under the lock above.
+	if !persistMetaMint {
+		if errPersist := m.persist(ctx, auth); errPersist != nil {
+			log.WithFields(log.Fields{"auth_id": auth.ID, "credential": auth.ID, "provider": auth.Provider}).Warnf("failed to persist updated auth %s (%s): %v", auth.Provider, auth.ID, errPersist)
+		}
 	}
 	m.hook.OnAuthUpdated(ctx, auth.Clone())
 	if cooldownStateChanged {
