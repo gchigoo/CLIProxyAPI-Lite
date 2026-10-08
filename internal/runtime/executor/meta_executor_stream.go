@@ -84,6 +84,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		var param any
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
+		sawTerminal := false
 		emitTranslatedLine := func(translatedLine []byte) bool {
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, translatedLine, &param, claudeInputTokens)
 			for i := range chunks {
@@ -120,6 +121,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			case "response.output_item.done":
 				xaiCollectOutputItemDone(eventData, outputItemsByIndex, &outputItemsFallback)
 			case "response.completed", "response.incomplete":
+				sawTerminal = true
 				if detail, ok := helps.ParseCodexUsage(eventData); ok {
 					reporter.Publish(ctx, detail)
 				}
@@ -134,6 +136,18 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			reporter.PublishFailure(ctx, errScan)
 			select {
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		// Lite: a clean EOF without a terminal event is a truncated response,
+		// reported like the non-stream path instead of as a finished stream.
+		if !sawTerminal && ctx.Err() == nil {
+			errIncomplete := statusErr{code: http.StatusRequestTimeout, msg: "meta stream error: stream disconnected before response.completed or response.incomplete"}
+			helps.RecordAPIResponseError(ctx, e.cfg, errIncomplete)
+			reporter.PublishFailure(ctx, errIncomplete)
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Err: errIncomplete}:
 			case <-ctx.Done():
 			}
 		}
