@@ -233,13 +233,14 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 			line = helps.FilterSSEUsageMetadata(line)
 
 			payload := helps.JSONPayload(line)
-			if len(pendingJSON) > 0 && antigravityStreamLineStartsEvent(line, payload) {
-				// A complete data frame starts a new event; the pending payload can never complete.
-				log.Warnf("antigravity executor: dropping incomplete stream payload (%d bytes)", len(pendingJSON))
-				pendingJSON = nil
-			}
 			if len(pendingJSON) > 0 {
 				trimmedLine := bytes.TrimSpace(line)
+				if len(trimmedLine) == 0 {
+					// A blank line ends the SSE event; a payload still invalid here can never complete.
+					log.Warnf("antigravity executor: dropping incomplete stream payload (%d bytes)", len(pendingJSON))
+					pendingJSON = nil
+					continue
+				}
 				if bytes.HasPrefix(trimmedLine, []byte("data:")) {
 					trimmedLine = bytes.TrimSpace(trimmedLine[len("data:"):])
 				}
@@ -247,7 +248,18 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 					pendingJSON = append(pendingJSON, '\n')
 					pendingJSON = append(pendingJSON, trimmedLine...)
 				}
-				if !gjson.ValidBytes(pendingJSON) {
+				if len(pendingJSON) > antigravityMaxPendingJSONBytes {
+					errPending := statusErr{code: http.StatusBadGateway, msg: "antigravity stream payload exceeded the multi-line size limit without becoming valid JSON"}
+					helps.RecordAPIResponseError(ctx, e.cfg, errPending)
+					reporter.PublishFailure(ctx, errPending)
+					select {
+					case out <- cliproxyexecutor.StreamChunk{Err: errPending}:
+					case <-ctx.Done():
+					}
+					return
+				}
+				// A JSON payload can only become valid on a line that closes it.
+				if !(bytes.HasSuffix(trimmedLine, []byte("}")) || bytes.HasSuffix(trimmedLine, []byte("]"))) || !gjson.ValidBytes(pendingJSON) {
 					continue
 				}
 				payload = pendingJSON
@@ -335,15 +347,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
 }
 
-// antigravityStreamLineStartsEvent reports whether a line is a complete SSE data frame,
-// which cannot continue a pending multi-line payload.
-func antigravityStreamLineStartsEvent(line, payload []byte) bool {
-	trimmed := bytes.TrimSpace(line)
-	if !bytes.HasPrefix(trimmed, []byte("data:")) || len(payload) == 0 || payload[0] != '{' {
-		return false
-	}
-	return gjson.ValidBytes(payload)
-}
+// antigravityMaxPendingJSONBytes bounds a stream payload assembled from several
+// lines; multi-line payloads are small error bodies in practice.
+var antigravityMaxPendingJSONBytes = 1 << 20
 
 // antigravityStreamPayloadHasFinishReason reports whether an upstream frame ends the response.
 func antigravityStreamPayloadHasFinishReason(payload []byte) bool {

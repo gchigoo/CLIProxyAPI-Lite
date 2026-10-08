@@ -173,3 +173,74 @@ func helpsJSONPayloadForTest(chunk []byte) []byte {
 	}
 	return chunk
 }
+
+// One SSE event may spread a JSON payload over several data lines, and a middle
+// line can itself be a complete JSON object. Only the event boundary may
+// resynchronize the pending payload.
+func TestAntigravityStreamJoinsMultiLineEventWithCompleteInnerLine(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"response":{"candidates":[
+data: {"content":{"role":"model","parts":[{"text":"joined across lines"}]},"finishReason":"STOP"}
+data: ],"modelVersion":"gemini-3.7-flash","usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":4,"totalTokenCount":7}}}
+
+`)
+	}))
+	defer server.Close()
+
+	chunks := collectAntigravityStream(t, server.URL, sdktranslator.FormatOpenAI, sdktranslator.FormatOpenAI,
+		`{"model":"gemini-3.7-flash","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	joined := bytes.Join(chunks, []byte("\n"))
+	if !bytes.Contains(joined, []byte("joined across lines")) {
+		t.Fatalf("multi-line event text was lost: %s", joined)
+	}
+	if !bytes.Contains(joined, []byte(`"finish_reason":"stop"`)) {
+		t.Fatalf("multi-line event did not complete the stream: %s", joined)
+	}
+}
+
+// A payload that never becomes valid JSON must not grow without bound while the
+// upstream keeps the connection open.
+func TestAntigravityStreamPendingPayloadLimitEndsStream(t *testing.T) {
+	previous := antigravityMaxPendingJSONBytes
+	antigravityMaxPendingJSONBytes = 256
+	t.Cleanup(func() { antigravityMaxPendingJSONBytes = previous })
+
+	upstreamClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"x\":[\n")
+		for i := 0; i < 200; i++ {
+			_, _ = io.WriteString(w, "data: 1,\n")
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+		case <-upstreamClosed:
+		}
+	}))
+	defer func() {
+		close(upstreamClosed)
+		server.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var streamErr error
+	for chunk := range executeAntigravityTestStream(t, ctx, "antigravity-pending-limit-test", server.URL, sdktranslator.FormatOpenAI,
+		`{"model":"gemini-3.7-flash","stream":true,"messages":[{"role":"user","content":"hello"}]}`) {
+		if chunk.Err != nil {
+			streamErr = chunk.Err
+			break
+		}
+	}
+	if ctx.Err() != nil {
+		t.Fatal("stream did not end before the test deadline; the pending payload kept growing")
+	}
+	statusError, ok := streamErr.(interface{ StatusCode() int })
+	if !ok || statusError.StatusCode() != http.StatusBadGateway {
+		t.Fatalf("pending payload limit error = %v, want status %d", streamErr, http.StatusBadGateway)
+	}
+}
