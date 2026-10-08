@@ -4168,10 +4168,12 @@
       "max_completion_tokens": 65536,
       "thinking": {
         "levels": [
+          "minimal",
           "low",
           "medium",
           "high",
-          "xhigh"
+          "xhigh",
+          "max"
         ]
       },
       "supportedInputModalities": [
@@ -4195,10 +4197,12 @@
       "max_completion_tokens": 65536,
       "thinking": {
         "levels": [
+          "minimal",
           "low",
           "medium",
           "high",
-          "xhigh"
+          "xhigh",
+          "max"
         ]
       },
       "supportedInputModalities": [
@@ -4222,6 +4226,7 @@
       "max_completion_tokens": 65536,
       "thinking": {
         "levels": [
+          "minimal",
           "low",
           "medium",
           "high",
@@ -4249,6 +4254,7 @@
       "max_completion_tokens": 65536,
       "thinking": {
         "levels": [
+          "minimal",
           "low",
           "medium",
           "high",
