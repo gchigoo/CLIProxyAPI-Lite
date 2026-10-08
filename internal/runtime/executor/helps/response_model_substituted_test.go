@@ -24,6 +24,10 @@ func TestUsageReporterResponseModelSubstituted(t *testing.T) {
 		{name: "known equivalent with case and prefix", model: "xai/grok-4.7", served: "GROK-4.7-Build", want: false},
 		{name: "known equivalent only for its requested model", model: "grok-4.6", served: "grok-4.7-build", want: true},
 		{name: "unknown served model for allowlisted request", model: "grok-4.7", served: "grok-4.7-mini", want: true},
+		{name: "versioned grok build", model: "grok-4.8", served: "grok-4.8-build", want: false},
+		{name: "implicit alias upstream build", model: "cpa-x48", upstream: "grok-4.8", served: "grok-4.8-build", want: false},
+		{name: "grok build fast still substituted", model: "grok-4.8", served: "grok-4.8-build-fast", want: true},
+		{name: "grok build of another version", model: "grok-4.8", served: "grok-4.7-build", want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
