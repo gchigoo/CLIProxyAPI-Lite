@@ -26,6 +26,9 @@ var metaRefreshGroup singleflight.Group
 
 const metaUserAgent = "muse-build/1.3.0 (interactive; macos-aarch64; build ac7280f2aca67769d1455a8847bb502b617d50f6)"
 
+// metaMintTimeout bounds request-time API key minting, matching the login client.
+const metaMintTimeout = 30 * time.Second
+
 // MetaExecutor implements the cliproxyauth.ProviderExecutor for Meta Muse models (api.meta.ai).
 type MetaExecutor struct {
 	cfg *config.Config
@@ -105,7 +108,9 @@ func (e *MetaExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*c
 	}
 
 	mintRes, err, _ := metaRefreshGroup.Do(dcaToken, func() (any, error) {
-		authSvc := metaauth.NewMetaAuthWithProxyURL(e.cfg, auth.ProxyURL)
+		// Lite: mint through the fail-closed proxy-aware client so an invalid
+		// explicit proxy never falls back to a direct connection.
+		authSvc := metaauth.NewMetaAuthWithHTTPClient(e.cfg, helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, metaMintTimeout))
 		return authSvc.MintAPIKey(ctx, dcaToken)
 	})
 	if err != nil {

@@ -250,6 +250,16 @@ func NewMetaAuthWithProxyURL(cfg *config.Config, proxyURL string) *MetaAuth {
 	}
 }
 
+// NewMetaAuthWithHTTPClient creates a MetaAuth service that sends every request
+// through httpClient. Request-time minting passes the executor's fail-closed
+// proxy-aware client here.
+func NewMetaAuthWithHTTPClient(cfg *config.Config, httpClient *http.Client) *MetaAuth {
+	if httpClient == nil {
+		return NewMetaAuth(cfg)
+	}
+	return &MetaAuth{cfg: cfg, httpClient: httpClient}
+}
+
 // StartDeviceFlow initiates the device authorization flow with Meta.
 func (a *MetaAuth) StartDeviceFlow(ctx context.Context) (*DeviceCodeResponse, error) {
 	return a.StartDeviceFlowWithEndpoint(ctx, DeviceAuthorizationEndpoint)
