@@ -622,5 +622,7 @@ Lite commits in this update:
 - `fix(lite): mint Meta API keys through the fail-closed proxy client`: upstream mints at request time through `util.SetProxy`, which falls back to the default transport on an invalid explicit proxy. Request-time minting (executor refresh, request preparation and management `api-call`) uses the executor's proxy-aware client with the 30 second credential timeout. CLI and management login keep the same client pattern as the xAI and Kimi logins.
 - `fix(lite): honor Meta retry-after on not-found and model-support failures`: see 9bdde54b above.
 - A configuration test guards against a returning `meta-api-key` section.
+- `fix(lite): harden Meta request preparation against failures and reloads` (final review): preparation returned a nil auth on a store failure or a removed credential, which the conductor dereferenced; and a watcher reload, which keeps the registration epoch, let an in-flight Meta mint install its obsolete key. Preparation now returns the request's auth with the error, and Meta preparation applies the refresh path's credential-version check. Claude and Antigravity preparation are unchanged.
+- `fix(lite): fail Meta streams that end before a terminal event` (final review): a clean EOF without `response.completed` or `response.incomplete` now returns the non-stream path's 408 error and records a failed attempt.
 
 Live Meta login and requests are not verified by these changes; mock traffic does not establish provider compatibility.
