@@ -579,3 +579,48 @@ Before deployment, Codex (gpt-6-astra, high effort) reviewed the release delta 3
 Ruling: after a token rotation, a late account-level 429 from the old credential version is still dropped as a stale result (6920ed5d, upstream #6416). Before output is streamed, the conductor fails over to another credential within the same request. Later or concurrent requests can still pick the exhausted credential until a current-version failure sets its cooldown, and an error after streamed output reaches the client. This is the upstream-intended tradeoff and is kept.
 
 After these fixes Codex returned "Deploy: yes" for a848939e through the final release commit.
+
+## Meta (Muse Code) OAuth provider (2026-10-08)
+
+Baseline: `5b2027c7` (`personal/main`). This adopts the Meta provider that the 2026-09-23 update deferred, for OAuth accounts only: CLI `--meta-login`, the management `meta-auth-url` device flow, the native Responses executor, the `muse-spark-*` catalog and the `meta` OAuth alias, exclusion and request-scoped error channels. There is no `meta-api-key` configuration section. The apply_patch bridge group and the v8 migration (31f4cfab) stay deferred. This section supersedes the earlier deferred and excluded rows for these SHAs.
+
+Each pick three-way merges the touched files after normalizing the upstream `v8` import path to `v7` in the upstream parent and commit. Commits keep the upstream author and message, describe the retained portion in a "Lite adaptation" paragraph and end with `(cherry picked from commit ...)`. Picks follow upstream commit dates. Two intermediate upstream states carry upstream test defects that the next pick fixes: cee799f6 (test race, fixed by 47cc31ae) and 65348b95 (stale User-Agent expectation, fixed by 311efcb3).
+
+| Upstream SHA | Change | Decision | Rationale |
+|---|---|---|---|
+| 54d4f4c0193c9941e23c8d3c1c13580b7962b85c | feat(meta): add native Meta (Muse Code) provider and OAuth device flow | adapted | Auth package, CLI login, catalog, registration and executor taken. The `meta-api-key` types, sanitizer, weight family, synthesizer, client counts, config diff, reload count, SDK aliases and example are excluded. |
+| 30191c3ad6f9c2d0ca7453986a7924663c830736 | feat(meta): mint LLM API key from device access token via /muse-code/key | included | |
+| 23c16e2985bbe80f7a96d87143f1149b8cd02c6a | feat(meta): add Meta OAuth management endpoint and WebUI / TUI support | included | |
+| 18385de001933252d300b5c3f8c4fe067ef8e86a | fix(tui): rename Meta provider label from Meta (Muse) to Meta | included | |
+| e475807a96c93f6b5cab9455e1722a2cc4bcaad0 | feat(meta): add Meta API key management handlers, routes, logo, and tests | adapted | OAuth provider normalization (`meta`, `muse`), its tests and the logo only; key handlers, routes and tests excluded. |
+| cee799f61af3a8e9b2717df31493e2054e90e861 | fix(meta): address review feedback on credential lifecycle, models, and config loading | adapted | Meta key counts and diff excluded; the optional-config loading change belongs to the deferred fbf74645. |
+| 47cc31aed8332ced472dda62fed6c8685bed0b2f | fix(meta): exclude cleared expired timestamp on persist, add runtime alias resolution, and fix test race | adapted | `meta-api-key` alias, capability and request-scoped error resolution excluded. The `requestToFormat` hunk has no Lite target: Lite removed it with the plugin request interceptor. |
+| 21aa46b60347022e58ac9f66e0bce4dfa5b49662 | chore(meta): keep provider PR scoped to Meta support | adapted | Only removals of code taken from earlier picks apply (local Muse CLI credential import, generic `api_key` token lookup). |
+| be7323f3bf66f2775a73832f3685f7021e36f929 | fix(meta): recover and persist minted credentials correctly | adapted | `meta-api-key` normalization and its test excluded. |
+| d09042a548105c1693f95e080546180f18334dcd | fix(meta): implement request preparer, disable unconditional refresh, scope 429 quota, and stabilize auth index | adapted | `meta-api-key` auth index seed and its test excluded. |
+| 1144ae707bfff4e3a2c8f2776adf426e012bb89d | fix(meta): require OAuth storage for DCA tokens and reject them in config meta-api-key | adapted | Executor and management guards only; the configuration rejection is excluded. |
+| 06660dd6f47bcbbc82d770af3a4f92fac02f0463 | fix(meta): validate catalog section, singleflight management mints, and synchronize singleflight test | included | |
+| 4a0131c062cdb0a2a3c084e05a4bbfa733d5b792 | fix(meta): unify credential minting and preserve auth lifecycle | adapted | Lite's logged non-Meta persist failure is kept and runs only when the Meta mint was not already persisted under the manager lock. |
+| 65348b9594258df448b923638205aaa8af2a3300 | feat(executor): add native Meta (Muse Code) provider integration | adapted | `requestToFormat` hunk dropped as in 47cc31ae. |
+| 311efcb3a29e341e682c496e855009c53846adb6 | test(executor): use metaUserAgent constant in meta executor test | included | |
+| e9463ff5a79537b22971d101c4e9f49797fe682c | feat(executor): extend response model recording and substitution warnings to all providers | adapted | Meta executor part, completing the earlier adoption. |
+| cde7d57e44e6c52fd59d532b35c9a33886d99823 | fix(executor): robust response model observability across meta, kimi, and openai-compat streams | adapted | Meta executor part, completing the earlier adoption. |
+| 7d888bf3cac88847f77dd6942e62d7e63f298796 | feat(auth): persist meta mint subscription metadata in auth record | included | |
+| 9bdde54b59d1af70ae0534a0ef61b2c3361a1257 | fix(meta): fix client id header and preserve subscription metadata | adapted | Executor and management parts taken. The conductor retry-after change and its executor test land in the Lite commit "honor Meta retry-after on not-found and model-support failures", gated to `meta` because the Claude executor attaches rate-limit reset headers to any 4xx and Antigravity forwards a cause's retry-after. |
+| 2c27e61fe791fa22c8c9b0d1bc2a9b9cad9eb80c | fix(meta): strip unsupported search_content_types from web search tools | included | |
+| 71a5f1f6c5b38341a7dc5de524a0d88f4f7cc431 | fix(codex): normalize tool parameter number types to integer for codex clients | adapted | Meta executor part; the helper was adopted earlier. |
+| a8ffd5a8432849cdefe333ffa132b8ada770c671 | fix(codex): skip tool parameter integer normalization for codex executor targets | adapted | Meta executor test part; the helper change was adopted earlier. |
+| 249e9ef97611cbd99eee422821cfa3a939dca88e | fix(meta): preserve foreign reasoning encrypted content in responses requests | adapted | Lite's sanitizer predates upstream's `WithCompat` variant, so only a `keepForeign` option is added; the `WithCompat` tests and apply_patch test context are excluded. |
+| 8335eac731946bd4eff18f500653f93736df53d6 | feat(config): add Meta OAuth aliasing and error rules support | adapted | `meta-api-key` mentions, the sample plugin provider example and the Devin and plugin-provider alias tests excluded. |
+| 3ebee065161b38ebfdff8f4fa51fcfd50c552c40 | fix(interactions): bridge apply_patch tool calls in responses translation | deferred | Meta executor parts stay with the deferred apply_patch bridge group. |
+| 57bde35179ecbdca176ca8923d39cc18805774f2 | fix(executor): preserve upstream usage on apply patch failures | deferred | Meta executor parts stay with the deferred apply_patch bridge group. |
+| 3b69068e6c8c028c56b7d0d0467a61d8c66e103c | fix(translator): stop dropping attachments and empty turns | deferred | Meta executor part (`TranslateRequestReturningError`) stays with the deferred attachment translator contract. |
+
+Lite commits in this update:
+
+- `test(lite): assert Meta usage records carry the served model`: non-stream and stream usage records carry `ResponseModel` and `ResponseModelSubstituted` (CUSTOMIZATIONS.md item 9).
+- `fix(lite): mint Meta API keys through the fail-closed proxy client`: upstream mints at request time through `util.SetProxy`, which falls back to the default transport on an invalid explicit proxy. Request-time minting (executor refresh, request preparation and management `api-call`) uses the executor's proxy-aware client with the 30 second credential timeout. CLI and management login keep the same client pattern as the xAI and Kimi logins.
+- `fix(lite): honor Meta retry-after on not-found and model-support failures`: see 9bdde54b above.
+- A configuration test guards against a returning `meta-api-key` section.
+
+Live Meta login and requests are not verified by these changes; mock traffic does not establish provider compatibility.

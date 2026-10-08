@@ -7,10 +7,11 @@ This project keeps the original MIT license and upstream Git history. It is inde
 ## Scope
 
 - Retains the built-in OpenAI, Codex, Claude, Gemini, Antigravity, Vertex, Kimi and xAI integrations present in the base version, including compatible API providers.
+- Adds Meta (Muse Code) OAuth accounts from upstream: log in with `--meta-login` (device code) or the management `meta-auth-url` endpoint, then use the `muse-spark-*` models. Static `meta-api-key` entries are not supported.
 - Retains OAuth, account rotation, cooldowns, model aliases, streaming, WebSocket and image handling, management APIs, configuration reload, and built-in usage accounting.
 - Preserves account-stable native identity, provider TLS/uTLS profiles, explicit-proxy fail-closed behavior and Codex multi-agent client compatibility.
 - Removes dynamic plugin loading, plugin SDK/store/install/update, plugin routes, plugin OAuth, Home plugin synchronization and dynamic request/response/translation/scheduling hooks.
-- Does not include Devin or LAN gateway discovery. New upstream integrations and extension frameworks are outside the default scope.
+- Does not include Devin or LAN gateway discovery. Other new upstream integrations and extension frameworks are outside the default scope.
 
 Home's non-plugin functionality, native usage sinks, storage backends and the TUI remain available. The internal usage sink interface named `Plugin` does not load third-party code.
 
