@@ -319,3 +319,36 @@ func TestAntigravityStreamPendingPayloadLimitCoversFirstFragment(t *testing.T) {
 		t.Fatalf("first fragment limit error = %v, want status %d", streamErr, http.StatusBadGateway)
 	}
 }
+
+// Terminal delivery must come from a validated, forwarded payload. A malformed
+// event that merely mentions a finishReason (observed raw by the replay
+// accumulator) must not let a later non-terminal frame complete the stream.
+func TestAntigravityStreamMalformedFinishReasonDoesNotMarkTerminal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"response":{"candidates":[{"finishReason":"STOP"}]
+
+data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"partial"}]}}],"modelVersion":"gemini-3.7-flash"}}
+
+`)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var streamErr error
+	for chunk := range executeAntigravityTestStream(t, ctx, "antigravity-malformed-finish-test", server.URL, sdktranslator.FormatOpenAI,
+		`{"model":"gemini-3.7-flash","stream":true,"messages":[{"role":"user","content":"hello"}]}`) {
+		if chunk.Err != nil {
+			streamErr = chunk.Err
+			continue
+		}
+		if bytes.Contains(chunk.Payload, []byte(`"finish_reason":"stop"`)) {
+			t.Fatalf("malformed finishReason completed the stream: %s", chunk.Payload)
+		}
+	}
+	statusError, ok := streamErr.(interface{ StatusCode() int })
+	if !ok || statusError.StatusCode() != http.StatusBadGateway {
+		t.Fatalf("malformed finishReason error = %v, want status %d", streamErr, http.StatusBadGateway)
+	}
+}

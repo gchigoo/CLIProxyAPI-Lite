@@ -304,7 +304,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 			payload = e.resolveWebSearchGroundingURLs(ctx, auth, from, originalPayload, translated, payload)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, opts.OriginalRequest, translated, bytes.Clone(payload), &param, claudeInputTokens)
-			isTerminalChunk := antigravityStreamPayloadHasFinishReason(payload) || (replayAccumulator != nil && replayAccumulator.terminal)
+			// Only a validated, forwarded payload may mark the response terminal; the
+			// replay accumulator also observes raw lines from malformed events.
+			isTerminalChunk := antigravityStreamPayloadHasFinishReason(payload)
 			for i := range chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
