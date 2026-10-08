@@ -562,3 +562,5 @@ Baseline: 0042b881 (`upgrade/v8.0.20-selective`). These commits were deferred in
 The tests deferred from a3b77566 and c7b4d573 in the v8.0.20 update are restored. Lite adds `internal/servedmodel` (a bounded per-credential summary fed by the usage pipeline) and the `served_models` field in `GET /v0/management/auth-files`.
 
 In Lite, c7b4d573's source change is behavior-neutral: payload overrides are already applied before `cacheHelper`, so the restored test guards the recorded effort rather than a changed path.
+
+The final review found that the summary judged substitution against `Record.Model`, which for Kimi is the client model while a mapped model is sent upstream; every mapped Kimi request appeared substituted although the warning stayed silent. The reporter now computes the substitution once with the warning's rule (expected upstream model first) and records it as the Lite field `Record.ResponseModelSubstituted`, which the summary mirrors. Codex Execute and ExecuteStream gained executor-level served-model assertions.
