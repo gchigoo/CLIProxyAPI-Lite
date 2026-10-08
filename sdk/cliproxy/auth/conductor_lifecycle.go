@@ -196,7 +196,10 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 		return nil, fmt.Errorf("update auth %s: stale registration epoch %d != %d", auth.ID, base.RegistrationEpoch, existing.RegistrationEpoch)
 	}
 	// Do not let an in-flight refresh overwrite credentials committed after its snapshot.
-	if mode == updateModeRefresh && base != nil && (existing.CredentialVersion != base.CredentialVersion || CredentialsChanged(base, existing)) {
+	// A Meta mint during request preparation is a credential refresh too: a watcher
+	// reload keeps the registration epoch, so only this check rejects the old key.
+	guardCredentials := mode == updateModeRefresh || (mode == updateModePrepare && strings.EqualFold(strings.TrimSpace(auth.Provider), "meta"))
+	if guardCredentials && base != nil && (existing.CredentialVersion != base.CredentialVersion || CredentialsChanged(base, existing)) {
 		current := existing.Clone()
 		m.mu.Unlock()
 		return current, nil

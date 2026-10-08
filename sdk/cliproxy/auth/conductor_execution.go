@@ -1394,7 +1394,7 @@ func (m *Manager) PrepareRequestAuth(ctx context.Context, preparer RequestAuthPr
 	}
 	m.mu.RUnlock()
 	if current == nil && strings.EqualFold(strings.TrimSpace(auth.Provider), "meta") {
-		return nil, fmt.Errorf("prepare meta auth: credential no longer registered")
+		return auth, fmt.Errorf("prepare meta auth: credential no longer registered")
 	}
 
 	if !preparer.ShouldPrepareRequestAuth(target) {
@@ -1412,13 +1412,14 @@ func (m *Manager) PrepareRequestAuth(ctx context.Context, preparer RequestAuthPr
 
 	saved, errUpdate := m.UpdatePreparedAuth(ctx, base, updated)
 	if errUpdate != nil {
-		return nil, errUpdate
+		// Callers record the failure against the returned auth.
+		return auth, errUpdate
 	}
 	if saved != nil {
 		return saved, nil
 	}
 	if strings.EqualFold(strings.TrimSpace(auth.Provider), "meta") {
-		return nil, fmt.Errorf("prepare meta auth: credential removed during mint")
+		return auth, fmt.Errorf("prepare meta auth: credential removed during mint")
 	}
 	return target, nil
 }
