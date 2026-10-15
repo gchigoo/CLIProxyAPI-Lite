@@ -69,6 +69,12 @@ type Result struct {
 	CredentialVersion uint64
 	// RegistrationEpoch captures the registration epoch under which the request was executed.
 	RegistrationEpoch uint64
+	// ExecutionSeq is the manager-local monotonic sequence assigned when the
+	// execution was dispatched upstream. It orders in-flight executions so a
+	// success dispatched before a cooldown was recorded cannot clear that
+	// cooldown. Zero means unknown (direct MarkResult callers) and is exempt
+	// from the ordering guard.
+	ExecutionSeq uint64
 }
 
 // Selector chooses an auth candidate for execution.
@@ -116,9 +122,12 @@ type Manager struct {
 	mu                        sync.RWMutex
 	selectorMu                sync.Mutex
 	configCooldownMu          sync.Mutex
-	auths                     map[string]*Auth
-	authEpochs                map[string]uint64
-	scheduler                 *authScheduler
+	// executionSeq stamps upstream dispatches with a monotonic sequence used
+	// to reject cooldown clears from executions dispatched before the cooldown.
+	executionSeq atomic.Uint64
+	auths        map[string]*Auth
+	authEpochs   map[string]uint64
+	scheduler    *authScheduler
 	// homeRuntimeAuths retains legacy session auth lookups for non-execution callers.
 	homeRuntimeAuths map[string]map[string]*Auth
 	// homeRuntimeAuthOwners prevents a stale selection from clearing a replacement auth.
