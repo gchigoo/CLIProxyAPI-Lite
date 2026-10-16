@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -132,6 +133,11 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			}
 		}
 		if errScan := scanner.Err(); errScan != nil {
+			// A terminal event that was delivered is a finished response, even
+			// when the client disconnects before the upstream body ends.
+			if sawTerminal && errors.Is(errScan, context.Canceled) {
+				return
+			}
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
 			reporter.PublishFailure(ctx, errScan)
 			select {
