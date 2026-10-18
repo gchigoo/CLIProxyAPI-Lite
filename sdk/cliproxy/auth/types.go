@@ -780,14 +780,23 @@ func ProviderRefreshLead(provider string, runtime any) *time.Duration {
 	refreshLeadMu.RLock()
 	factory := refreshLeadFactories[provider]
 	refreshLeadMu.RUnlock()
-	if factory == nil {
+	if factory != nil {
+		if lead := factory(); lead != nil && *lead > 0 {
+			return lead
+		}
 		return nil
 	}
-	if lead := factory(); lead != nil && *lead > 0 {
-		return lead
+	if provider == "codex" {
+		d := CodexOuterRefreshLead
+		return &d
 	}
 	return nil
 }
+
+// CodexOuterRefreshLead is the conservative proactive refresh lead time before
+// the nominal 10-day Codex OAuth JWT expiration, refreshing tokens well ahead
+// of early upstream access-token invalidation.
+const CodexOuterRefreshLead = 96 * time.Hour
 
 func parseTimeValue(v any) (time.Time, bool) {
 	switch value := v.(type) {
