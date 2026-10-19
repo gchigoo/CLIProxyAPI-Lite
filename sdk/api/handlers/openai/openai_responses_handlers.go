@@ -143,8 +143,9 @@ func (f *responsesSSEFramer) shouldFilterPrivateEvent(streamEvent, payloadType s
 			return false
 		}
 
-		// For standard Responses API clients: filter any codex.* private events.
-		if strings.HasPrefix(name, "codex.") {
+		// For standard Responses API clients: filter any codex.* private events and the
+		// ChatGPT moderation metadata event, which strict clients reject as an unknown variant.
+		if strings.HasPrefix(name, "codex.") || name == "response.metadata" {
 			return true
 		}
 

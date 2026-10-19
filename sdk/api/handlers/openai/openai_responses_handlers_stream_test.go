@@ -712,3 +712,60 @@ func TestResponsesSSEFramer_CodexClientFiltersRateLimitsAndTiming(t *testing.T) 
 		t.Fatalf("expected response.completed in output, got: %q", got)
 	}
 }
+
+const responsesModerationMetadataFrame = "event: response.metadata\ndata: {\"type\":\"response.metadata\",\"response_id\":\"resp-1\",\"sequence_number\":5,\"metadata\":{\"openai_chatgpt_moderation_metadata\":{\"prompt\":{\"omnimod\":{\"protection_type\":\"omnimod\"}}}}}\n\n"
+
+func TestResponsesSSEFramer_FiltersResponseMetadataForNonCodexClient(t *testing.T) {
+	var output bytes.Buffer
+	framer := &responsesSSEFramer{failureEvent: "error"}
+
+	framer.WriteChunk(&output, []byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n"))
+	framer.WriteChunk(&output, []byte(responsesModerationMetadataFrame))
+	// Data-only frames carry the event name only in the payload type.
+	framer.WriteChunk(&output, []byte("data: {\"type\":\"response.metadata\",\"response_id\":\"resp-1\",\"metadata\":{}}\n\n"))
+	framer.WriteChunk(&output, []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"status\":\"completed\"}}\n\n"))
+
+	got := output.String()
+	if strings.Contains(got, "response.metadata") || strings.Contains(got, "openai_chatgpt_moderation_metadata") {
+		t.Fatalf("expected response.metadata to be stripped for non-Codex client, got: %q", got)
+	}
+	if !strings.Contains(got, "event: response.created") || !strings.Contains(got, "event: response.completed") {
+		t.Fatalf("expected lifecycle events to be preserved, got: %q", got)
+	}
+}
+
+func TestResponsesSSEFramer_PreservesResponseMetadataForCodexClient(t *testing.T) {
+	var output bytes.Buffer
+	framer := &responsesSSEFramer{failureEvent: "response.failed", isCodexClient: true}
+
+	framer.WriteChunk(&output, []byte(responsesModerationMetadataFrame))
+	framer.WriteChunk(&output, []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"status\":\"completed\"}}\n\n"))
+
+	got := output.String()
+	if !strings.Contains(got, "event: response.metadata") {
+		t.Fatalf("expected response.metadata to be preserved for official Codex client, got: %q", got)
+	}
+}
+
+func TestForwardResponsesStream_FiltersResponseMetadataForNonCodexClient(t *testing.T) {
+	h, recorder, c, flusher := newResponsesStreamTestHandler(t)
+	c.Request.Header.Set("User-Agent", "grok/1.0.62")
+
+	data := make(chan []byte, 3)
+	errs := make(chan *interfaces.ErrorMessage)
+	data <- []byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\n")
+	data <- []byte(responsesModerationMetadataFrame)
+	data <- []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"status\":\"completed\"}}\n\n")
+	close(data)
+	close(errs)
+
+	h.forwardResponsesStream(c, flusher, func(error) {}, data, errs, nil)
+
+	got := recorder.Body.String()
+	if strings.Contains(got, "response.metadata") {
+		t.Fatalf("expected response.metadata to be stripped in stream, got: %q", got)
+	}
+	if !strings.Contains(got, "event: response.created") || !strings.Contains(got, "event: response.completed") {
+		t.Fatalf("expected lifecycle events in stream output, got: %q", got)
+	}
+}
