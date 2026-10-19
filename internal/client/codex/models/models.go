@@ -414,11 +414,20 @@ func applyCodexClientProviderCapabilities(entry map[string]any, id string, isTem
 		entry["prefer_websockets"] = false
 		delete(entry, "apply_patch_tool_type")
 		entry["service_tiers"] = []any{}
+		disableCodexOnlyToolOptions(entry)
 		delete(entry, "upgrade")
 		delete(entry, "availability_nux")
 		return
 	}
 	applyCodexClientSearchToolSupport(entry, id, isTemplate, providersForModel)
+}
+
+// disableCodexOnlyToolOptions resets template options that only the native Codex backend supports,
+// so non-Codex routes do not inherit code-mode tools, Responses Lite or live effort updates.
+func disableCodexOnlyToolOptions(entry map[string]any) {
+	entry["tool_mode"] = "direct"
+	entry["use_responses_lite"] = false
+	entry["supports_reasoning_effort_updates"] = false
 }
 
 func isPureCodexProvider(id string, providersForModel ProvidersForModelFunc) bool {
@@ -526,6 +535,7 @@ func applyCodexClientModelMetadata(entry map[string]any, id string, model map[st
 	}
 	entry["service_tiers"] = []any{}
 	delete(entry, "apply_patch_tool_type")
+	disableCodexOnlyToolOptions(entry)
 	delete(entry, "upgrade")
 	delete(entry, "availability_nux")
 
