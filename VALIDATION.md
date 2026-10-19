@@ -195,3 +195,18 @@ Branch `feature/meta-provider` on top of `personal/main` (5b2027c7). Executed on
 Review: Codex hit its usage limit before reporting, so an independent read-only Claude (opus) review covered the branch. It found one critical issue (a nil auth panic when Meta request preparation fails) and two important ones (a watcher reload during a mint installed the obsolete key; a truncated stream finished cleanly). All three were fixed test-first. Its minor findings are deferred; the pre-existing one is that a refresh or preparation save can recreate an auth file deleted on disk before the watcher removes it.
 
 Mock traffic only: Meta login, minting and requests are not yet observed against the live Meta service.
+
+## Selective update through v8.0.34 (2026-10-19)
+
+Branch `upgrade/v8.0.34-selective` on top of `personal/main` (e314cf1e). Executed on macOS arm64 with Go 1.27.1:
+
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed on the e314cf1e baseline before the update.
+- Every pick was gofmt-checked and built, and its touched packages were tested before the pick was finalized.
+- `TestResponsesSSEFramer_FiltersResponseMetadataForNonCodexClient` and `TestForwardResponsesStream_FiltersResponseMetadataForNonCodexClient` failed before the `response.metadata` fix, with the moderation metadata frame in the client output. `TestResponsesSSEFramer_PreservesResponseMetadataForCodexClient` guards official Codex clients. The review follow-up test `TestForwardResponsesWebsocketFiltersPrivateEventsForNonCodexClient` failed for a non-Codex WebSocket client before its fix; its official Codex client case passed before and after.
+- `CGO_ENABLED=0 go test -count=1 -p 4 ./...` passed on the final branch: 89 packages with tests, 30 without.
+- `CGO_ENABLED=1 go test -race -count=1` passed for sdk/api/handlers/openai (again after the review fix), internal/registry, internal/client/codex/models, sdk/cliproxy/auth, internal/runtime/executor/..., internal/util and sdk/auth.
+- `go vet` on the touched packages, `go build ./...`, a Linux amd64 build of cmd/server, gofmt on modified Go files and `git diff --check` passed. `claude_thinking_replay_test.go` and `codex_stream_bootstrap_buffering_test.go` remain unformatted as on the baseline.
+
+No live provider requests were made, and the Linux binary was not run.
+
+Review: an independent read-only Codex review of e314cf1e..f298d8b8 found no defects in the ExecutionSeq cooldown fencing, the cancelled-stream cooldowns, the Codex SSE scanner and identity confusion, the registry counting or the Meta terminal handling. It returned "Merge: no" for one gap that predates the update: the Responses WebSocket forwarder still sent `response.metadata`, `codex.*` and `responsesapi.*` events to non-Codex clients. That gap was fixed test-first in 5c54ba1a, after which the full suite was rerun as above, and the re-review returned "Merge: yes". Its remaining minor note is that the WebSocket forwarder matches only the JSON `type`, so a frame whose `event:` line names a private event but whose JSON has no `type` would still pass; Codex frames carry `type`. The reviewer's sandbox could not run `go test`, so all test results above come from this session.
