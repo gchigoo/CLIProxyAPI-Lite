@@ -53,6 +53,8 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 	if c != nil && c.Request != nil {
 		downstreamSessionKey = websocketDownstreamSessionKey(c.Request)
 	}
+	// Official Codex clients keep the native event stream; others get the SSE event set.
+	isCodexClient := isCodexResponsesClientRequest(c)
 
 	var keepAliveTicker *time.Ticker
 	var keepAliveC <-chan time.Time
@@ -141,7 +143,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 			payloads := websocketJSONPayloadsFromChunk(chunk)
 			for i := range payloads {
 				eventType := gjson.GetBytes(payloads[i], "type").String()
-				if eventType == "response.subscription_usage" {
+				if eventType == "response.subscription_usage" || (!isCodexClient && isNonCodexPrivateResponsesEvent(eventType)) {
 					continue
 				}
 				collectResponsesWebsocketOutputItem(payloads[i], outputItemsByIndex, &outputItemsFallback)

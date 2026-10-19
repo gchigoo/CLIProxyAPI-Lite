@@ -6711,3 +6711,99 @@ func TestResponsesWebsocketNativePassthroughClearsObservedCompaction(t *testing.
 		t.Fatalf("expected at least 2 payloads, got %d", len(executor.payloads))
 	}
 }
+
+func TestForwardResponsesWebsocketFiltersPrivateEventsForNonCodexClient(t *testing.T) {
+	cases := []struct {
+		name        string
+		originator  string
+		wantPrivate bool
+	}{
+		{name: "non-Codex client", wantPrivate: false},
+		{name: "official Codex client", originator: "codex_cli_rs", wantPrivate: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			serverErrCh := make(chan error, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := responsesWebsocketUpgrader.Upgrade(w, r, nil)
+				if err != nil {
+					serverErrCh <- err
+					return
+				}
+				defer func() { _ = conn.Close() }()
+
+				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+				ctx.Request = r
+
+				data := make(chan []byte, 4)
+				errCh := make(chan *interfaces.ErrorMessage)
+				data <- []byte(`{"type":"response.created","response":{"id":"resp-1"}}`)
+				data <- []byte(`{"type":"response.metadata","response_id":"resp-1","sequence_number":5,"metadata":{"openai_chatgpt_moderation_metadata":{}}}`)
+				data <- []byte(`{"type":"codex.response.metadata","headers":{"x-turn-state":"turn-1"}}`)
+				data <- []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[]}}`)
+				close(data)
+				close(errCh)
+
+				_, _, _, errMsg, errForward := (*OpenAIResponsesAPIHandler)(nil).forwardResponsesWebsocket(
+					ctx,
+					newResponsesWebsocketWriter(conn),
+					func(...interface{}) {},
+					data,
+					errCh,
+					newInMemoryWebsocketTimelineLog(),
+					"session-1",
+				)
+				if errForward != nil {
+					serverErrCh <- errForward
+					return
+				}
+				if errMsg != nil {
+					serverErrCh <- fmt.Errorf("unexpected websocket error message: %v", errMsg.Error)
+					return
+				}
+				serverErrCh <- nil
+			}))
+			defer server.Close()
+
+			header := http.Header{}
+			if tc.originator != "" {
+				header.Set("Originator", tc.originator)
+			}
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), header)
+			if err != nil {
+				t.Fatalf("dial websocket: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+
+			var types []string
+			for {
+				_, payload, errRead := conn.ReadMessage()
+				if errRead != nil {
+					t.Fatalf("read websocket message: %v (received %v)", errRead, types)
+				}
+				eventType := gjson.GetBytes(payload, "type").String()
+				types = append(types, eventType)
+				if eventType == "response.completed" {
+					break
+				}
+			}
+			if errServer := <-serverErrCh; errServer != nil {
+				t.Fatalf("server: %v", errServer)
+			}
+
+			gotPrivate := false
+			for _, eventType := range types {
+				if eventType == "response.metadata" || eventType == "codex.response.metadata" {
+					gotPrivate = true
+				}
+			}
+			if gotPrivate != tc.wantPrivate {
+				t.Fatalf("received events %v; private metadata forwarded = %v, want %v", types, gotPrivate, tc.wantPrivate)
+			}
+			if types[0] != "response.created" {
+				t.Fatalf("received events %v, want response.created first", types)
+			}
+		})
+	}
+}

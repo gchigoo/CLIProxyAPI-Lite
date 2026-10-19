@@ -143,16 +143,17 @@ func (f *responsesSSEFramer) shouldFilterPrivateEvent(streamEvent, payloadType s
 			return false
 		}
 
-		// For standard Responses API clients: filter any codex.* private events and the
-		// ChatGPT moderation metadata event, which strict clients reject as an unknown variant.
-		if strings.HasPrefix(name, "codex.") || name == "response.metadata" {
-			return true
-		}
-
-		return false
+		return isNonCodexPrivateResponsesEvent(name)
 	}
 
 	return check(streamEvent) || check(payloadType)
+}
+
+// isNonCodexPrivateResponsesEvent reports upstream events that only official Codex clients
+// understand: internal WebSocket timing telemetry, private codex.* events and the ChatGPT
+// moderation metadata event, which strict Responses clients reject as an unknown variant.
+func isNonCodexPrivateResponsesEvent(name string) bool {
+	return strings.HasPrefix(name, "responsesapi.") || strings.HasPrefix(name, "codex.") || name == "response.metadata"
 }
 
 func (f *responsesSSEFramer) repairFrame(frame []byte) []byte {
